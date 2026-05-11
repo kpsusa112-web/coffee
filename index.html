@@ -1476,8 +1476,18 @@ let orderSearchQuery = '';
 let orderClientFilter = null;
 
 function orderSearchLive() {
-  orderSearchQuery = (document.getElementById('o-search')?.value||'');
+  const newQ = (document.getElementById('o-search')?.value||'');
+  const wasEmpty = !orderSearchQuery.trim();
+  orderSearchQuery = newQ;
   orderClientFilter = null; // 입력 시 이전 자동완성 잠금 해제
+  // 검색을 새로 시작할 때(빈 상태 → 입력) 월/주차 필터를 자동 해제하여 항상 결과가 보이도록
+  if (wasEmpty && newQ.trim()) {
+    if (selectedOrderMonths.size > 0) selectedOrderMonths.clear();
+    orderWeekFilter = 0;
+    const wrap = document.getElementById('o-week-wrap');
+    if (wrap) wrap.style.display = 'none';
+    updateOrderWeekUI && updateOrderWeekUI();
+  }
   const cl = document.getElementById('o-clear');
   if(cl) cl.style.display = orderSearchQuery ? 'block':'none';
   renderOrders();
@@ -2675,8 +2685,11 @@ function deleteInventory(id){
 // 반환: { batches:[{...item, used, remain, exhausted, exhaustOrders[]}], orders:[...관련 발주], totalIn, totalUsed, totalRemain }
 // ───────────────────────────────────────────────────────
 function calcInventoryFIFO(bean){
+  // 오늘 날짜 (입고일 기준 재고 계산: 미래 입고 예정분은 현재 재고에서 제외)
+  const _today = new Date().toISOString().slice(0,10);
   // 1. 해당 원두의 입고건을 입고일 빠른 순(오름차순)으로 정렬, 같은 날짜는 id 순
-  const batches = inventory.filter(i=>i.bean===bean)
+  //    단, 입고일이 오늘보다 미래인 건은 제외 (예: 5/12 입고예정 → 5/11엔 미반영)
+  const batches = inventory.filter(i=>i.bean===bean && (i.inDate||'1900-01-01') <= _today)
     .sort((a,b)=>{
       const c = (a.inDate||'').localeCompare(b.inDate||'');
       return c!==0 ? c : ((a.id||0) - (b.id||0));
@@ -2768,37 +2781,38 @@ function renderInventory(){
   if(!targetBeans.length){
     sumEl.innerHTML='<div class="no-data" style="padding:20px;">등록된 재고가 없습니다</div>';
   } else {
-    sumEl.innerHTML = targetBeans.map(b=>{
+    // 3×3 그리드 - 한눈에 모든 원두 확인. 카드 클릭 시 상세 모달.
+    const tiles = targetBeans.map(b=>{
       const s=calcBeanStock(b);
       if(!s) return '';
       const alertColor = s.alertLevel==='danger' ? 'var(--red)' : (s.alertLevel==='warn' ? 'var(--amb)' : 'var(--grn-dk)');
       const alertBg    = s.alertLevel==='danger' ? 'var(--red-bg,#FDECEC)' : (s.alertLevel==='warn' ? 'var(--amb-bg)' : 'var(--grn-bg)');
-      const lowColor = s.remain<=0?'var(--red)':alertColor;
-      const pct = (s.ratio*100).toFixed(0);
-      // 진행률 바 색상
-      const barColor = s.alertLevel==='danger' ? 'var(--red)' : (s.alertLevel==='warn' ? 'var(--amb)' : 'var(--grn-dk)');
-      const barWidth = Math.max(2, Math.min(100, s.ratio*100));
+      const lowColor   = s.remain<=0?'var(--red)':alertColor;
+      const pct        = (s.ratio*100).toFixed(0);
+      const barWidth   = Math.max(2, Math.min(100, s.ratio*100));
+      const beanEsc    = b.replace(/'/g,"\\'");
+      const shortName  = b.length > 7 ? b.slice(0,6)+'…' : b;
       return `
-      <div onclick="openBeanDetail('${b.replace(/'/g,"\\'")}')" style="padding:12px 14px;border-bottom:1px solid var(--bdr);cursor:pointer;transition:background .15s;${s.alertLevel!=='ok'?`border-left:3px solid ${alertColor};`:''}" onmouseover="this.style.background='var(--surf2)'" onmouseout="this.style.background=''">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-          <div style="font-size:15px;font-weight:800;">☕ ${b}
-            <span style="font-size:10px;font-weight:700;margin-left:6px;padding:2px 7px;border-radius:100px;background:${alertBg};color:${alertColor};">${s.alertText} · ${pct}%</span>
-            <span style="font-size:10px;color:var(--muted);margin-left:4px;">▶ 상세보기</span>
-          </div>
-          <div style="font-size:18px;font-weight:800;color:${lowColor};">${s.remain.toFixed(1)}<span style="font-size:11px;font-weight:400;">kg</span></div>
+      <div onclick="openBeanDetail('${beanEsc}')" title="${b}"
+        style="background:var(--surf);border:1px solid var(--bdr);border-left:3px solid ${alertColor};border-radius:10px;padding:10px 8px;cursor:pointer;display:flex;flex-direction:column;gap:6px;min-height:118px;transition:transform .12s, box-shadow .12s;"
+        onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,.08)'"
+        onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="font-size:12px;font-weight:800;line-height:1.2;display:flex;align-items:center;gap:3px;">
+          <span>☕</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${shortName}</span>
         </div>
-        <div style="height:6px;background:var(--surf2);border-radius:100px;overflow:hidden;margin-bottom:8px;">
-          <div style="height:100%;width:${barWidth}%;background:${barColor};transition:width .3s;"></div>
+        <div style="font-size:18px;font-weight:800;color:${lowColor};line-height:1;">
+          ${s.remain.toFixed(1)}<span style="font-size:10px;font-weight:400;color:var(--muted);"> kg</span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:11px;">
-          <div style="background:var(--surf2);padding:6px 8px;border-radius:6px;"><span style="color:var(--muted);">총 입고</span> <strong>${s.totalIn.toFixed(1)}kg</strong></div>
-          <div style="background:var(--surf2);padding:6px 8px;border-radius:6px;"><span style="color:var(--muted);">사용량</span> <strong>${s.used.toFixed(1)}kg</strong></div>
-          <div style="background:var(--surf2);padding:6px 8px;border-radius:6px;"><span style="color:var(--muted);">일평균</span> <strong>${s.dailyAvg.toFixed(2)}kg</strong></div>
-          <div style="background:var(--surf2);padding:6px 8px;border-radius:6px;"><span style="color:var(--muted);">소진예정</span> <strong style="color:${lowColor};">${s.exhaustDate}${s.daysLeft!==null?` (${s.daysLeft}일)`:''}</strong></div>
-          <div style="grid-column:span 2;background:var(--amb-bg);color:var(--amb);padding:6px 8px;border-radius:6px;">📦 권장 입고량 (30일분): <strong>${s.need30.toFixed(1)}kg</strong></div>
+        <div style="height:4px;background:var(--surf2);border-radius:100px;overflow:hidden;">
+          <div style="height:100%;width:${barWidth}%;background:${alertColor};"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:auto;">
+          <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:100px;background:${alertBg};color:${alertColor};white-space:nowrap;">${pct}%</span>
+          <span style="font-size:9px;color:var(--muted);">${s.daysLeft!==null?s.daysLeft+'일':'—'}</span>
         </div>
       </div>`;
     }).join('');
+    sumEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px;">${tiles}</div>`;
   }
   // 입고 이력
   const histEl=document.getElementById('inv-history');
