@@ -1477,6 +1477,7 @@ let orderClientFilter = null;
 
 function orderSearchLive() {
   orderSearchQuery = (document.getElementById('o-search')?.value||'');
+  orderClientFilter = null; // 입력 시 이전 자동완성 잠금 해제
   const cl = document.getElementById('o-clear');
   if(cl) cl.style.display = orderSearchQuery ? 'block':'none';
   renderOrders();
@@ -1689,7 +1690,26 @@ function renderOrders() {
     const lastDate = [...g.orders].sort((a, b) => b.date.localeCompare(a.date))[0]?.date || '-';
     const beans = [...new Set(g.orders.map(o => o.bean).filter(Boolean))];
     const dates = [...new Set(g.orders.map(o => o.date))].sort();
-    return { cid: g.clientId, name, manager, kg, cnt: g.orders.length, lastDate, beans, dates };
+    // 현재 필터 결과 기반 평균 주기 (참고)
+    let avgCycle = null;
+    if (dates.length >= 2) {
+      let sum = 0;
+      for (let i = 1; i < dates.length; i++) {
+        sum += (new Date(dates[i]) - new Date(dates[i-1])) / 86400000;
+      }
+      avgCycle = Math.round(sum / (dates.length - 1));
+    }
+    // 전체 발주 이력 기반 평균 주기 (거래처별 진짜 평균)
+    let avgCycleAll = null;
+    if (g.clientId) {
+      const allDates = [...new Set(orders.filter(o => o.clientId === g.clientId).map(o => o.date).filter(Boolean))].sort();
+      if (allDates.length >= 2) {
+        let s = 0;
+        for (let i = 1; i < allDates.length; i++) s += (new Date(allDates[i]) - new Date(allDates[i-1])) / 86400000;
+        avgCycleAll = Math.round(s / (allDates.length - 1));
+      }
+    }
+    return { cid: g.clientId, name, manager, kg, cnt: g.orders.length, lastDate, beans, dates, avgCycle, avgCycleAll };
   }).sort((a, b) => b.kg - a.kg);
 
   // o-count 텍스트 (총 매출 포함)
@@ -1735,7 +1755,7 @@ function renderOrders() {
       <div class="li-main">
         <div class="li-name">${q ? highlightMatch(g.name, q) : g.name}</div>
         <div class="li-sub">${g.manager}${g.beans.length ? ' · ' + g.beans.join(', ') : ''}</div>
-        <div style="margin-top:2px;font-size:11px;color:var(--hint)">최근 발주: ${g.lastDate}</div>
+        <div style="margin-top:2px;font-size:11px;color:var(--hint)">최근 발주: ${g.lastDate}${g.avgCycleAll!=null?` · <span style="color:var(--grn-dk);font-weight:600;">평균 ${g.avgCycleAll}일 주기</span>`:''}</div>
       </div>
       <div class="li-r">
         <div class="li-val">${g.kg}kg</div>
