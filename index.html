@@ -3591,16 +3591,20 @@ if(API_URL){document.getElementById('api-url').value=API_URL;syncNow().then(()=>
 else setSyncBadge('local');
 renderHome();
 updateUserPill();
-if (!currentUser) showLogin();
-
-// ─── 모바일 검색 보완 ───────────────────────────────────
-// 외부 터치/클릭 시 키보드 닫기
-document.addEventListener('touchstart', e => {
-  const activeEl = document.activeElement;
-  if (activeEl && (activeEl.id==='c-search'||activeEl.id==='o-search') && !activeEl.contains(e.target)) {
-    activeEl.blur();
+// [v22] 로그인 비활성화 — 자동으로 admin 진입
+try {
+  loginRequired = function(){ return false; };
+  if (!currentUser) {
+    const _u = (typeof loadUsers==='function' ? loadUsers() : []).find(x=>x.role==='admin')
+            || (typeof DEFAULT_USERS!=='undefined' ? DEFAULT_USERS[0] : {id:'admin',name:'관리자',role:'admin'});
+    currentUser = {id:_u.id, name:_u.name, role:_u.role};
+    sessionStorage.setItem('crm_curu', JSON.stringify(currentUser));
   }
-}, {passive:true});
+  const _lo = document.getElementById('login-overlay'); if(_lo) _lo.style.display='none';
+} catch(e){ console.warn('auto-login skip', e); }
+
+// [v22] 모바일 검색 자동 blur 제거 — 검색 입력 끊김 방지
+// (touchstart 리스너 삭제됨)
 
 // UI/UX 편집기는 별도 프로그램 ui_ux_editor_v1.html 로 분리됨
 </script>
@@ -3697,6 +3701,51 @@ document.addEventListener('touchstart', e => {
   } else {
     boot();
   }
+})();
+</script>
+<!-- ═══════════════════════════════════════════════════════════════
+     [v22 PATCH] 로그인 제거 + 모든 수정/삭제 차단 + 검색 안정화
+     =================================================================== -->
+<style id="v22-readonly">
+  /* 사용자/로그인 UI 완전 숨김 */
+  #user-pill, #login-overlay, #sh-user { display:none !important; }
+
+  /* 거래처/발주 시트의 삭제·저장 버튼 숨김 */
+  #sc-del, #so-del, #sc-save, #so-save { display:none !important; }
+
+  /* 거래처 목록의 ✏️ 수정 버튼 숨김 */
+  #client-list button[onclick*="openEditClient"] { display:none !important; }
+
+  /* 차트 모달의 거래처 수정 버튼 숨김 */
+  button[onclick*="openEditClient"] { display:none !important; }
+
+  /* 발주 목록의 수정/삭제 버튼 숨김 */
+  button[onclick*="openEditOrder"],
+  button[onclick*="deleteOrder"] { display:none !important; }
+
+  /* 공지사항 수정/삭제 숨김 */
+  button[onclick*="editNotice"],
+  button[onclick*="deleteNotice"] { display:none !important; }
+
+  /* 재고 입고 기록 삭제 숨김 */
+  button[onclick*="deleteInventory"] { display:none !important; }
+</style>
+<script>
+(function(){
+  // 모든 수정/삭제 함수를 안내 토스트로 차단
+  const blocked = ['deleteClient','deleteOrder','deleteNotice','deleteInventory',
+                   'deleteUser','editNotice','openEditClient','openEditOrder'];
+  const block = function(){
+    if (typeof showToast === 'function') showToast('🔒 읽기 전용 모드 — 수정/삭제가 비활성화되었습니다');
+    else alert('읽기 전용 모드입니다');
+  };
+  blocked.forEach(fn => { try { window[fn] = block; } catch(e){} });
+
+  // 거래처 시트가 열려도 저장/삭제 못하도록 (신규 추가만 허용)
+  const _origOpenEditClient = window.openEditClient;
+  // 이미 위에서 차단됨
+
+  console.log('[v22] 읽기 전용 + 로그인 제거 패치 적용됨');
 })();
 </script>
 </body>
