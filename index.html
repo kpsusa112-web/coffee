@@ -3604,5 +3604,100 @@ document.addEventListener('touchstart', e => {
 
 // UI/UX 편집기는 별도 프로그램 ui_ux_editor_v1.html 로 분리됨
 </script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     [PATCH v2] iOS Safari 동기화 + 계정/로그인이력 서버 연동
+     ※ 아래 DEFAULT_API_URL 자리에 본인 Apps Script 웹앱 URL 입력
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  // ★★★ 여기를 본인 Apps Script 웹앱 URL로 수정하세요 (끝이 /exec) ★★★
+  const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycby2MgEd72vRd8OnpFgqKNLL_hUyWCIVEX-L_rCwQ9ETsShl__t6ZgwLwmJMK8PHl6Hicw/exec';
+
+  // 1) API URL 자동 설정 — iOS에서 처음 들어와도 동작
+  if (!localStorage.getItem('crm_api') && DEFAULT_API_URL.indexOf('여기에_배포ID') < 0) {
+    localStorage.setItem('crm_api', DEFAULT_API_URL);
+    if (typeof API_URL !== 'undefined') { try { API_URL = DEFAULT_API_URL; } catch(_){} }
+    const inp = document.getElementById('api-url');
+    if (inp) inp.value = DEFAULT_API_URL;
+  }
+  const getApi = () => localStorage.getItem('crm_api') || DEFAULT_API_URL;
+
+  // 2) 서버에서 계정/로그인이력 끌어오기
+  async function pullAuth() {
+    const api = getApi();
+    if (!api || api.indexOf('여기에_배포ID') >= 0) return;
+    try {
+      const r = await fetch(api + '?action=getAuth&v=' + Date.now(), { cache:'no-store' });
+      const d = await r.json();
+      if (Array.isArray(d.users) && d.users.length) {
+        localStorage.setItem('crm_users', JSON.stringify(d.users));
+      }
+      if (Array.isArray(d.logs)) {
+        localStorage.setItem('crm_login_logs', JSON.stringify(d.logs));
+      }
+      console.log('[sync] auth pulled', d.users?.length, d.logs?.length);
+    } catch(e){ console.warn('[sync] pullAuth fail', e); }
+  }
+
+  // 3) 서버 푸시
+  async function pushUsers(users){
+    const api = getApi();
+    if (!api || api.indexOf('여기에_배포ID') >= 0) return;
+    try {
+      await fetch(api, {
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body: JSON.stringify({ action:'saveUsers', users })
+      });
+    } catch(e){ console.warn('[sync] pushUsers fail', e); }
+  }
+  async function pushLog(log){
+    const api = getApi();
+    if (!api || api.indexOf('여기에_배포ID') >= 0) return;
+    try {
+      await fetch(api, {
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body: JSON.stringify({ action:'addLoginLog', log })
+      });
+    } catch(e){ console.warn('[sync] pushLog fail', e); }
+  }
+
+  // 4) localStorage.setItem 후킹 — 기존 코드 수정 없이 자동 동기화
+  const _set = Storage.prototype.setItem;
+  Storage.prototype.setItem = function(k, v){
+    _set.apply(this, arguments);
+    if (this !== localStorage) return;
+    try {
+      if (k === 'crm_users') {
+        pushUsers(JSON.parse(v));
+      } else if (k === 'crm_login_logs') {
+        const arr  = JSON.parse(v) || [];
+        const prev = JSON.parse(localStorage.getItem('crm_login_logs_synced') || '[]');
+        // 새로 추가된 로그만 서버로 보냄 (배열 앞쪽이 최신)
+        const newCount = Math.max(0, arr.length - prev.length);
+        for (let i = 0; i < newCount; i++) pushLog(arr[i]);
+        _set.call(localStorage, 'crm_login_logs_synced', v);
+      }
+    } catch(_){}
+  };
+
+  // 5) 페이지 진입/포커스 복귀 시 서버에서 다시 끌어오기 (iOS ITP 대응)
+  function boot(){
+    pullAuth();
+    setInterval(pullAuth, 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) pullAuth();
+    });
+    window.addEventListener('pageshow', pullAuth);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>
 </body>
 </html>
