@@ -384,10 +384,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 <div class="page" id="page-orders">
   <div style="display:flex;gap:7px;align-items:center;margin-bottom:10px;">
     <div style="position:relative;flex:1;">
-      <input type="text" id="o-search" placeholder="거래처명으로 검색..."
+      <input type="text" id="o-search" placeholder="거래처명·담당자·원두로 검색..."
         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
         style="width:100%;padding:11px 38px 11px 13px;font-size:16px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);-webkit-appearance:none;box-sizing:border-box;"
-        oninput="orderSearchLive()" oncompositionend="orderSearchLive()" onkeydown="if(event.key==='Enter'){orderSearchExec();this.blur();}">
+        oninput="orderSearchLive()" onkeyup="orderSearchLive()" oncompositionend="setTimeout(orderSearchLive,0)" onkeydown="if(event.key==='Enter'){orderSearchExec();this.blur();}">
       <span id="o-clear" onclick="orderSearchClear()" style="display:none;position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:17px;color:var(--muted);cursor:pointer;line-height:1;padding:4px;">✕</span>
     </div>
     <button onclick="orderSearchExec()" style="flex-shrink:0;width:46px;height:46px;border-radius:var(--r);border:1px solid var(--bdr2);background:var(--surf);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🔍</button>
@@ -1607,9 +1607,14 @@ function renderOrders() {
   if (!singleMonth) orderWeekFilter = 0;
 
   let f = orders.slice();
+  let preMonthCount = 0;
   if (q) {
     const matchedIds = new Set(clients.filter(c => fuzzyMatch(c.name, q) || fuzzyMatch(c.manager || '', q)).map(c => c.id));
-    f = f.filter(o => matchedIds.has(o.clientId) || fuzzyMatch(o.clientName || '', q));
+    f = f.filter(o => matchedIds.has(o.clientId)
+      || fuzzyMatch(o.clientName || '', q)
+      || fuzzyMatch(o.bean || '', q)
+      || fuzzyMatch(o.memo || '', q));
+    preMonthCount = f.length;
   } else {
     f = filterOrdersByManager(f);
   }
@@ -1668,7 +1673,13 @@ function renderOrders() {
   if (!f.length) {
     el.innerHTML = '';
     em.style.display = 'block';
-    document.getElementById('o-count').innerHTML = '<span style="font-size:12px;color:var(--muted);">발주 없음</span>';
+    let msg = '<span style="font-size:12px;color:var(--muted);">발주 없음</span>';
+    if (q && preMonthCount > 0 && (selectedOrderMonths.size > 0 || (singleMonth && orderWeekFilter > 0))) {
+      msg = `<div style="font-size:12px;color:var(--amb);">"${q}" 검색 결과 ${preMonthCount}건이 있지만 월/주차 필터로 모두 가려졌어요. <a onclick="clearOrderMonths()" style="color:var(--grn-dk);text-decoration:underline;cursor:pointer;">월 필터 해제</a></div>`;
+    } else if (q) {
+      msg = `<span style="font-size:12px;color:var(--muted);">"${q}" 검색 결과 없음</span>`;
+    }
+    document.getElementById('o-count').innerHTML = msg;
     return;
   }
   em.style.display = 'none';
@@ -1773,6 +1784,16 @@ function openOrderDetail(cid) {
   const name = c ? c.name : '미등록';
   const totalKg = f.reduce((s, o) => s + (o.qty || 0), 0);
   const totalRev = f.reduce((s, o) => s + (o.amount || (o.qty*o.price) || 0), 0);
+  // 평균 발주 주기 (전체 발주 이력 기반)
+  const _dates = [...new Set(f.map(o=>o.date).filter(Boolean))].sort();
+  let _avgCycle = null;
+  if (_dates.length >= 2) {
+    let s = 0;
+    for (let i=1;i<_dates.length;i++) s += (new Date(_dates[i]) - new Date(_dates[i-1]))/86400000;
+    _avgCycle = Math.round(s / (_dates.length - 1));
+  }
+  const _lastDate = _dates.length ? _dates[_dates.length-1] : null;
+  const _daysSince = _lastDate ? Math.floor((new Date() - new Date(_lastDate))/86400000) : null;
 
   // 월별 요약 (최근 6개월)
   const monthMap = {};
@@ -1812,6 +1833,17 @@ function openOrderDetail(cid) {
         <div style="font-size:16px;font-weight:700;color:var(--txt)">${f.length ? (totalKg/f.length).toFixed(1) : 0}<span style="font-size:11px;font-weight:400">kg</span></div>
       </div>
     </div>
+    ${_avgCycle!=null ? `
+    <div style="background:linear-gradient(135deg, var(--grn-bg), var(--surf2));border:1px solid var(--grn);border-radius:var(--r);padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:2px;">🔄 평균 발주 주기</div>
+        <div style="font-size:18px;font-weight:800;color:var(--grn-dk);">${_avgCycle}<span style="font-size:11px;font-weight:500;color:var(--muted);"> 일마다</span></div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:2px;">마지막 발주 후</div>
+        <div style="font-size:16px;font-weight:700;color:${_daysSince!=null && _avgCycle && _daysSince > _avgCycle*1.3 ? 'var(--red)' : 'var(--txt)'};">${_daysSince!=null?_daysSince+'일':'-'}</div>
+      </div>
+    </div>` : ''}
     ${monthList.length > 0 ? `
     <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">월별 요약</div>
     <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px;">
@@ -1934,9 +1966,16 @@ function renderAnalytics() {
 
   // 주차별
   const wd={};
-  for(let i=19;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i*7);wd[getWK(d)]={n:0,w:20-i,date:new Date(d)};}
+  for(let i=19;i>=0;i--){
+    const d=new Date(now); d.setDate(d.getDate()-i*7);
+    // ISO-style 주의 시작(일요일)~끝(토요일) 계산
+    const start=new Date(d); start.setDate(d.getDate()-d.getDay());
+    const end=new Date(start); end.setDate(start.getDate()+6);
+    const fmt=x=>(x.getMonth()+1)+'/'+x.getDate();
+    wd[getWK(d)]={n:0,w:20-i,date:new Date(d),range:fmt(start)+'~'+fmt(end),startISO:start.toISOString().slice(0,10),endISO:end.toISOString().slice(0,10)};
+  }
   targetOrders.forEach(o=>{const wk=getWK(new Date(o.date||Date.now()));if(wk in wd)wd[wk].n++;});
-  document.getElementById('a-weeks').innerHTML=Object.entries(wd).map(([k,w])=>`<div class="wk${w.n>0?' hit':''}" ${w.n>0?`onclick="openWeekOrders('${k}')" style="cursor:pointer;"`:''}><div class="wk-n">${w.n>0?w.n:'·'}</div><div class="wk-l">W${w.w}</div></div>`).join('');
+  document.getElementById('a-weeks').innerHTML=Object.entries(wd).map(([k,w])=>`<div class="wk${w.n>0?' hit':''}" onclick="openWeekOrders('${k}','${w.range}','${w.startISO}','${w.endISO}',${w.w})" style="cursor:pointer;" title="W${w.w} · ${w.range}"><div class="wk-n">${w.n>0?w.n:'·'}</div><div class="wk-l">W${w.w}</div><div class="wk-d" style="font-size:9px;color:var(--hint);margin-top:1px;line-height:1;">${w.range}</div></div>`).join('');
 
   // 순위 / 원두별
   if (!analyticsClient) {
@@ -2268,7 +2307,8 @@ function openClientChart(cid) {
       <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">📅 개설일</span><span style="font-weight:600;">${c.openDate||'-'}</span></div>
       <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">👤 담당자</span><span style="font-weight:600;">${c.manager||'-'}</span></div>
       <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">📞 연락처</span><span style="font-weight:600;">${c.phone||'-'}</span></div>
-      <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">🔁 발주주기</span><span style="font-weight:600;">${CL[c.cycle]||c.cycle||'-'}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">🔁 설정 주기</span><span style="font-weight:600;">${CL[c.cycle]||c.cycle||'-'}</span></div>
+      ${(()=>{const ds=[...new Set(orders.filter(o=>o.clientId===cid).map(o=>o.date).filter(Boolean))].sort();if(ds.length<2)return '';let sm=0;for(let i=1;i<ds.length;i++)sm+=(new Date(ds[i])-new Date(ds[i-1]))/86400000;const avg=Math.round(sm/(ds.length-1));return `<div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">📊 실측 평균 주기</span><span style="font-weight:700;color:var(--grn-dk);">${avg}일마다 (${ds.length}회 기준)</span></div>`;})()}
       ${c.memo?`<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--bdr);color:var(--txt);white-space:pre-wrap;font-size:12px;"><span style="color:var(--muted);">📝 메모</span><br>${c.memo}</div>`:''}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
@@ -2968,8 +3008,8 @@ function runAIInsights(){
     }).filter(g=>g.cur>0||g.prev>0);
     const top3=growth.filter(g=>g.diff>0).sort((a,b)=>b.diff-a.diff).slice(0,3);
     const drop3=growth.filter(g=>g.prev>0&&g.diff<0).sort((a,b)=>a.diff-b.diff).slice(0,3);
-    if(top3.length) insights.push({icon:'🚀',title:'성장 중인 거래처 (최근 30일)',items:top3.map(g=>`<strong>${g.name}</strong> +${g.diff.toFixed(1)}kg (${g.pct>0?'+':''}${g.pct.toFixed(0)}%)`),color:'var(--grn-dk)'});
-    if(drop3.length) insights.push({icon:'⚠️',title:'발주 감소 주의',items:drop3.map(g=>`<strong>${g.name}</strong> ${g.diff.toFixed(1)}kg (${g.pct.toFixed(0)}%)`),color:'var(--red)'});
+    if(top3.length) insights.push({icon:'🚀',title:'성장 중인 거래처 (최근 30일)',items:top3.map(g=>`<strong>${g.name}</strong> +${g.diff.toFixed(1)}kg (${g.pct>0?'+':''}${g.pct.toFixed(0)}%)`),color:'var(--grn-dk)',why:`최근 30일 발주량과 그 직전 30일(31~60일 전) 발주량을 거래처별로 비교해, 증가량(kg)이 큰 상위 3곳을 표시합니다. %는 (이번-이전)/이전 × 100. 이전 발주가 0인 신규 거래처는 % 계산에서 0으로 처리됩니다.`});
+    if(drop3.length) insights.push({icon:'⚠️',title:'발주 감소 주의',items:drop3.map(g=>`<strong>${g.name}</strong> ${g.diff.toFixed(1)}kg (${g.pct.toFixed(0)}%)`),color:'var(--red)',why:`이전 30일에는 발주가 있었지만 최근 30일에 발주량이 줄어든 거래처 중 감소량이 큰 상위 3곳입니다. 이탈 위험 신호로 활용하세요.`});
 
     // 2. 원두 추세
     const beanCur={}, beanPrev={};
@@ -2981,23 +3021,23 @@ function runAIInsights(){
     });
     const beanRank=BEANS.map(b=>({b,cur:beanCur[b],prev:beanPrev[b],diff:beanCur[b]-beanPrev[b]})).filter(x=>x.cur>0).sort((a,b)=>b.cur-a.cur);
     if(beanRank.length){
-      insights.push({icon:'☕',title:'원두별 인기 (최근 30일)',items:beanRank.slice(0,5).map(x=>`<strong>${x.b}</strong> ${x.cur.toFixed(1)}kg ${x.diff>0?'<span style="color:var(--grn-dk)">↑</span>':x.diff<0?'<span style="color:var(--red)">↓</span>':''}`),color:'var(--amb)'});
+      insights.push({icon:'☕',title:'원두별 인기 (최근 30일)',items:beanRank.slice(0,5).map(x=>`<strong>${x.b}</strong> ${x.cur.toFixed(1)}kg ${x.diff>0?'<span style="color:var(--grn-dk)">↑</span>':x.diff<0?'<span style="color:var(--red)">↓</span>':''}`),color:'var(--amb)',why:`등록된 원두별 최근 30일 총 발주량을 합산해 정렬했습니다. 화살표는 이전 30일(31~60일 전) 합계 대비 증감 방향(↑ 증가, ↓ 감소)입니다.`});
     }
 
     // 3. 지연 거래처
     const overdue=baseClients.filter(isOD);
-    if(overdue.length) insights.push({icon:'⏰',title:`지연 의심 거래처 (${overdueWeeks}주 이상)`,items:overdue.slice(0,5).map(c=>`<strong>${c.name}</strong> · ${c.manager||'-'}`),color:'var(--red)'});
+    if(overdue.length) insights.push({icon:'⏰',title:`지연 의심 거래처 (${overdueWeeks}주 이상)`,items:overdue.slice(0,5).map(c=>`<strong>${c.name}</strong> · ${c.manager||'-'}`),color:'var(--red)',why:`거래처에 설정된 발주 주기(주 1회/격주/월 1회 등)와 마지막 발주일을 비교해, 예상 주기보다 ${overdueWeeks}주 이상 발주가 없는 활성 거래처를 추렸습니다. 비정기(custom) 거래처는 기본 ${overdueWeeks}주를 기준으로 합니다.`});
 
     // 4. 다음 30일 예측 발주량
     const last90=baseOrders.filter(o=>{const d=new Date(today);d.setDate(d.getDate()-90);return o.date>=d.toISOString().slice(0,10);});
     const totalKg=last90.reduce((s,o)=>s+(o.qty||0),0);
     const forecast=(totalKg/3).toFixed(1);
-    insights.push({icon:'🔮',title:'다음 30일 예상 발주량',items:[`최근 90일 평균 기반 약 <strong style="color:var(--grn-dk);font-size:15px;">${forecast}kg</strong> 예상`],color:'var(--grn-dk)'});
+    insights.push({icon:'🔮',title:'다음 30일 예상 발주량',items:[`최근 90일 평균 기반 약 <strong style="color:var(--grn-dk);font-size:15px;">${forecast}kg</strong> 예상`],color:'var(--grn-dk)',why:`최근 90일 총 발주량을 3으로 나눈 30일 평균값입니다. 계절성·신규/이탈 거래처 변동은 반영하지 않은 단순 추세 예측이므로 발주 계획의 참고용으로만 사용하세요.`});
 
     // 5. 재고 경보
     const stockAlerts=[];
     BEANS.forEach(b=>{const s=calcBeanStock(b); if(s && s.daysLeft!==null && s.daysLeft<14) stockAlerts.push(`<strong>${b}</strong> 잔여 ${s.remain.toFixed(1)}kg (${s.daysLeft}일분)`);});
-    if(stockAlerts.length) insights.push({icon:'📦',title:'재고 부족 경보 (2주 이내)',items:stockAlerts,color:'var(--red)'});
+    if(stockAlerts.length) insights.push({icon:'📦',title:'재고 부족 경보 (2주 이내)',items:stockAlerts,color:'var(--red)',why:`재고 탭에 입력한 입고량에서 발주(출고)량을 차감한 잔여 재고를, 최근 30일 일평균 사용량으로 나눈 "남은 일수"가 14일 미만인 원두입니다.`});
 
     // 6. 매출 (단가 입력된 경우)
     const withPrice=baseOrders.filter(o=>o.price>0);
@@ -3005,13 +3045,17 @@ function runAIInsights(){
       const revCur=baseOrders.filter(o=>o.date>=m30s&&o.price>0).reduce((s,o)=>s+(o.qty*o.price),0);
       const revPrev=baseOrders.filter(o=>o.date>=m60s&&o.date<m30s&&o.price>0).reduce((s,o)=>s+(o.qty*o.price),0);
       const dpct=revPrev?((revCur-revPrev)/revPrev*100):0;
-      insights.push({icon:'💰',title:'매출 추정 (단가 입력 기준)',items:[`최근 30일 <strong>${revCur.toLocaleString()}원</strong> ${revPrev?`(전월비 ${dpct>0?'+':''}${dpct.toFixed(0)}%)`:''}`],color:'var(--amb)'});
+      insights.push({icon:'💰',title:'매출 추정 (단가 입력 기준)',items:[`최근 30일 <strong>${revCur.toLocaleString()}원</strong> ${revPrev?`(전월비 ${dpct>0?'+':''}${dpct.toFixed(0)}%)`:''}`],color:'var(--amb)',why:`단가가 입력된 발주에 대해서만 (수량 × 단가)의 합계를 계산했습니다. 단가가 비어 있는 발주는 매출 추정에서 제외됩니다. 전월비는 직전 30일(31~60일 전) 대비 증감률입니다.`});
     }
 
     if(!insights.length){ el.innerHTML='<div class="no-data">분석할 데이터가 부족합니다</div>'; return; }
-    el.innerHTML = insights.map(ins=>`
+    el.innerHTML = insights.map((ins,idx)=>`
       <div style="margin-bottom:12px;padding:10px;background:var(--surf2);border-radius:8px;border-left:3px solid ${ins.color};">
-        <div style="font-size:13px;font-weight:800;color:${ins.color};margin-bottom:6px;">${ins.icon} ${ins.title}</div>
+        <div style="font-size:13px;font-weight:800;color:${ins.color};margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:6px;">
+          <span>${ins.icon} ${ins.title}</span>
+          ${ins.why?`<button onclick="document.getElementById('ai-why-${idx}').style.display=document.getElementById('ai-why-${idx}').style.display==='block'?'none':'block';" title="분석 근거 보기" style="flex-shrink:0;width:22px;height:22px;border-radius:50%;border:1px solid ${ins.color};background:var(--surf);color:${ins.color};font-size:11px;font-weight:800;font-style:italic;cursor:pointer;line-height:1;padding:0;font-family:Georgia,serif;">i</button>`:''}
+        </div>
+        ${ins.why?`<div id="ai-why-${idx}" style="display:none;margin-bottom:8px;padding:8px 10px;background:var(--surf);border:1px dashed ${ins.color};border-radius:6px;font-size:11.5px;line-height:1.6;color:var(--muted);">📌 <strong style="color:var(--txt);">분석 근거</strong><br>${ins.why}</div>`:''}
         <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.7;">
           ${ins.items.map(i=>`<li>${i}</li>`).join('')}
         </ul>
@@ -3309,13 +3353,15 @@ function renderBeansPie(bc) {
 // ═══════════════════════════════════════════════════════
 //  주차별 발주 이력 (analytics 클릭)
 // ═══════════════════════════════════════════════════════
-function openWeekOrders(wkKey) {
+function openWeekOrders(wkKey, range, startISO, endISO, wNum) {
   const targetOrders = analyticsClient
     ? orders.filter(o=>o.clientId===analyticsClient.id)
     : filterOrdersByManager(orders);
   const f = targetOrders.filter(o => getWK(new Date(o.date||Date.now())) === wkKey)
     .sort((a,b)=>b.date.localeCompare(a.date));
-  document.getElementById('sh-week-title').textContent = `${wkKey} 주차 발주 이력 (${f.length}건)`;
+  const titleSuffix = range ? ` · ${range}` : '';
+  const wLabel = wNum ? `W${wNum}` : wkKey;
+  document.getElementById('sh-week-title').textContent = `${wLabel}${titleSuffix} (${f.length}건)`;
   const totalKg = f.reduce((s,o)=>s+(o.qty||0),0);
   const byClient = {};
   f.forEach(o => {
@@ -3328,6 +3374,7 @@ function openWeekOrders(wkKey) {
   });
   const groups = Object.entries(byClient).sort((a,b)=>b[1].kg-a[1].kg);
   document.getElementById('sh-week-body').innerHTML = `
+    ${range?`<div style="background:var(--grn-bg);color:var(--grn-dk);border-radius:var(--r);padding:8px 12px;margin-bottom:10px;font-size:13px;font-weight:700;text-align:center;">📅 ${startISO||''} ~ ${endISO||''} (${range})</div>`:''}
     <div style="display:flex;gap:8px;margin-bottom:14px;">
       <div style="flex:1;background:var(--surf2);border-radius:var(--r);padding:10px;text-align:center;">
         <div style="font-size:10px;color:var(--muted);">발주 건수</div>
