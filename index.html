@@ -415,6 +415,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <button id="owk-4" onclick="setOrderWeek(4)" style="flex:1;padding:6px 4px;font-size:12px;border-radius:var(--r);border:1.5px solid var(--bdr2);background:var(--surf2);color:var(--muted);cursor:pointer;">4주<br><span style="font-size:10px;font-weight:400;">25~말일</span></button>
     </div>
   </div>
+  <!-- 정렬 필터 -->
+  <div style="margin-bottom:8px;">
+    <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:5px;">↕ 정렬</div>
+    <div id="o-sort-btns" style="display:flex;flex-wrap:wrap;gap:5px;">
+      <span class="chip active" data-osort="kg" onclick="setOrderSort('kg')">사용량 <span class="osi">↓</span></span>
+      <span class="chip" data-osort="cnt" onclick="setOrderSort('cnt')">발주횟수 <span class="osi">↕</span></span>
+      <span class="chip" data-osort="lastDate" onclick="setOrderSort('lastDate')">최근발주 <span class="osi">↕</span></span>
+      <span class="chip" data-osort="rev" onclick="setOrderSort('rev')">매출 <span class="osi">↕</span></span>
+      <span class="chip" data-osort="name" onclick="setOrderSort('name')">이름 <span class="osi">↕</span></span>
+    </div>
+  </div>
   <div id="o-count" style="margin-bottom:8px;"></div>
   <div id="o-week-totals" style="display:none;margin-bottom:10px;"></div>
   <div class="card" id="order-list"></div>
@@ -489,6 +500,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <select id="inv-filter" onchange="renderInventory()" style="padding:5px 9px;font-size:12px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
       <option value="">전체 원두</option>
     </select>
+  </div>
+  <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;flex-wrap:wrap;">
+    <label style="font-size:12px;font-weight:700;color:var(--muted);">📅 재고 기준일</label>
+    <input type="date" id="inv-base-date" onchange="renderInventory()"
+      style="padding:5px 8px;font-size:12px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
+    <button class="btn xs" onclick="document.getElementById('inv-base-date').value=new Date().toISOString().slice(0,10);renderInventory();">오늘</button>
+    <span id="inv-base-info" style="font-size:11px;color:var(--hint);"></span>
   </div>
   <div class="card" id="inv-summary"></div>
 
@@ -1522,6 +1540,28 @@ function selectOrderClient(id,name){
 
 let orderWeekFilter = 0; // 0=전체, 1~4=주차
 let selectedOrderMonths = new Set(); // 다중 선택된 월 목록
+let orderListSort = {key:'kg', dir:'desc'}; // 정렬 상태
+function setOrderSort(key){
+  if(orderListSort.key===key){
+    orderListSort.dir = orderListSort.dir==='desc' ? 'asc' : 'desc';
+  } else {
+    orderListSort.key = key;
+    orderListSort.dir = (key==='name' || key==='lastDate') ? 'desc' : 'desc';
+    if(key==='name') orderListSort.dir='asc';
+  }
+  document.querySelectorAll('#o-sort-btns .chip').forEach(el=>{
+    const k=el.dataset.osort;
+    const ind=el.querySelector('.osi');
+    if(k===orderListSort.key){
+      el.classList.add('active');
+      ind.textContent = orderListSort.dir==='desc' ? '↓' : '↑';
+    } else {
+      el.classList.remove('active');
+      ind.textContent = '↕';
+    }
+  });
+  renderOrders();
+}
 
 function getOrderWeek(dateStr) {
   if (!dateStr) return 0;
@@ -1708,6 +1748,7 @@ function renderOrders() {
     const name = c ? c.name : (g.clientName || '미등록');
     const manager = c?.manager || '-';
     const kg = g.orders.reduce((s, o) => s + (o.qty || 0), 0);
+    const rev = g.orders.reduce((s, o) => s + (o.amount || (o.qty*o.price) || 0), 0);
     const lastDate = [...g.orders].sort((a, b) => b.date.localeCompare(a.date))[0]?.date || '-';
     const beans = [...new Set(g.orders.map(o => o.bean).filter(Boolean))];
     const dates = [...new Set(g.orders.map(o => o.date))].sort();
@@ -1730,8 +1771,14 @@ function renderOrders() {
         avgCycleAll = Math.round(s / (allDates.length - 1));
       }
     }
-    return { cid: g.clientId, name, manager, kg, cnt: g.orders.length, lastDate, beans, dates, avgCycle, avgCycleAll };
-  }).sort((a, b) => b.kg - a.kg);
+    return { cid: g.clientId, name, manager, kg, rev, cnt: g.orders.length, lastDate, beans, dates, avgCycle, avgCycleAll };
+  }).sort((a, b) => {
+    const k = orderListSort.key, dir = orderListSort.dir==='asc' ? 1 : -1;
+    if(k==='name') return a.name.localeCompare(b.name,'ko') * dir;
+    if(k==='lastDate') return (a.lastDate||'').localeCompare(b.lastDate||'') * dir;
+    const av = a[k]||0, bv = b[k]||0;
+    return (av - bv) * dir;
+  });
 
   // o-count 텍스트 (총 매출 포함)
   const monthLabel = selectedOrderMonths.size > 0
@@ -2684,11 +2731,9 @@ function deleteInventory(id){
 // 각 입고건을 입고일 빠른 순으로 정렬 → 발주수량을 가장 빠른 입고건부터 차례로 차감
 // 반환: { batches:[{...item, used, remain, exhausted, exhaustOrders[]}], orders:[...관련 발주], totalIn, totalUsed, totalRemain }
 // ───────────────────────────────────────────────────────
-function calcInventoryFIFO(bean){
-  // 오늘 날짜 (입고일 기준 재고 계산: 미래 입고 예정분은 현재 재고에서 제외)
-  const _today = new Date().toISOString().slice(0,10);
-  // 1. 해당 원두의 입고건을 입고일 빠른 순(오름차순)으로 정렬, 같은 날짜는 id 순
-  //    단, 입고일이 오늘보다 미래인 건은 제외 (예: 5/12 입고예정 → 5/11엔 미반영)
+function calcInventoryFIFO(bean, baseDate){
+  // 기준일 (입고일 기준 재고 계산: 기준일보다 미래 입고건은 제외)
+  const _today = baseDate || new Date().toISOString().slice(0,10);
   const batches = inventory.filter(i=>i.bean===bean && (i.inDate||'1900-01-01') <= _today)
     .sort((a,b)=>{
       const c = (a.inDate||'').localeCompare(b.inDate||'');
@@ -2697,10 +2742,10 @@ function calcInventoryFIFO(bean){
     .map(i=>({...i, qty:Number(i.qty)||0, used:0, remain:Number(i.qty)||0, exhausted:false, exhaustOrders:[]}));
   if (!batches.length) return null;
 
-  // 2. 가장 빠른 입고일 이후의 발주를 날짜순(빠른 순)으로 정렬
+  // 2. 가장 빠른 입고일 이후 ~ 기준일 이전의 발주만 차감
   const earliest = batches[0].inDate || '1900-01-01';
   const relOrders = orders
-    .filter(o=>o.bean===bean && (o.date||'') >= earliest)
+    .filter(o=>o.bean===bean && (o.date||'') >= earliest && (o.date||'') <= _today)
     .sort((a,b)=>{
       const c = (a.date||'').localeCompare(b.date||'');
       return c!==0 ? c : ((a.id||0) - (b.id||0));
@@ -2732,9 +2777,9 @@ function calcInventoryFIFO(bean){
   return {batches, relOrders, totalIn, totalUsed, totalRemain, earliest};
 }
 
-function calcBeanStock(bean){
+function calcBeanStock(bean, baseDate){
   // FIFO 결과를 활용해 요약 지표 계산
-  const fifo = calcInventoryFIFO(bean);
+  const fifo = calcInventoryFIFO(bean, baseDate);
   if (!fifo) return null;
   const {batches, totalIn, totalUsed, totalRemain} = fifo;
   const totalIn_ = totalIn;
@@ -2749,7 +2794,7 @@ function calcBeanStock(bean){
     else if (ratio < 0.50) { alertLevel='warn';   alertText='⚡ 주의 (50% 미만)'; }
   }
   // 일평균 사용량 (최근 30일)
-  const today=new Date();
+  const today = baseDate ? new Date(baseDate) : new Date();
   const cutoff=new Date(today); cutoff.setDate(cutoff.getDate()-30);
   const cutStr=cutoff.toISOString().slice(0,10);
   const recent=orders.filter(o=>o.bean===bean && o.date>=cutStr);
@@ -2759,7 +2804,7 @@ function calcBeanStock(bean){
   let exhaustDate='—', daysLeft=null;
   if(dailyAvg>0 && remain>0){
     daysLeft=Math.floor(remain/dailyAvg);
-    const ed=new Date(); ed.setDate(ed.getDate()+daysLeft);
+    const ed = baseDate ? new Date(baseDate) : new Date(); ed.setDate(ed.getDate()+daysLeft);
     exhaustDate=ed.toISOString().slice(0,10);
   } else if(remain<=0){ exhaustDate='소진됨'; daysLeft=0; }
   // 권장 입고량 (다음 30일치)
@@ -2773,6 +2818,13 @@ function renderInventory(){
   if(!document.getElementById('inv-in-date').value)
     document.getElementById('inv-in-date').value=new Date().toISOString().slice(0,10);
   const filter=document.getElementById('inv-filter').value;
+  // 재고 기준일 (입력 없으면 오늘)
+  const baseEl = document.getElementById('inv-base-date');
+  if (baseEl && !baseEl.value) baseEl.value = new Date().toISOString().slice(0,10);
+  const baseDate = baseEl ? baseEl.value : new Date().toISOString().slice(0,10);
+  const todayStr = new Date().toISOString().slice(0,10);
+  const baseInfo = document.getElementById('inv-base-info');
+  if (baseInfo) baseInfo.textContent = baseDate===todayStr ? '(오늘 기준)' : `(${baseDate} 기준 — ${baseDate>todayStr?'미래':'과거'} 시점)`;
   // 재고 등록된 모든 원두 (BEANS 외 항목도 포함)
   const allBeans = [...new Set(inventory.map(i=>i.bean).filter(Boolean))];
   const orderedBeans = [...BEANS.filter(b=>allBeans.includes(b)), ...allBeans.filter(b=>!BEANS.includes(b))];
@@ -2783,7 +2835,7 @@ function renderInventory(){
   } else {
     // 3×3 그리드 - 한눈에 모든 원두 확인. 카드 클릭 시 상세 모달.
     const tiles = targetBeans.map(b=>{
-      const s=calcBeanStock(b);
+      const s=calcBeanStock(b, baseDate);
       if(!s) return '';
       const alertColor = s.alertLevel==='danger' ? 'var(--red)' : (s.alertLevel==='warn' ? 'var(--amb)' : 'var(--grn-dk)');
       const alertBg    = s.alertLevel==='danger' ? 'var(--red-bg,#FDECEC)' : (s.alertLevel==='warn' ? 'var(--amb-bg)' : 'var(--grn-bg)');
