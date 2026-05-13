@@ -1450,7 +1450,7 @@ function renderClients() {
   const bSel = document.getElementById('c-bean');
   if(bSel){const cur=bSel.value;bSel.innerHTML='<option value="">전체 원두</option>'+BEANS.map(b=>`<option value="${b}"${b===cur?' selected':''}>${b}</option>`).join('');}
   let f = clients.slice();
-  if(q) f = f.filter(c => fuzzyMatch(c.name,q) || fuzzyMatch(c.manager||'',q));
+  if(q) f = f.filter(c => fuzzyMatch(c.name,q) || fuzzyMatch(c.manager||'',q) || fuzzyMatch(c.memo||'',q));
   if(!q) f = filterByManager(f);
   if(st) f = f.filter(c=>c.status===st);
   if(bn) {
@@ -2272,7 +2272,7 @@ function openMonthModal(tab='ordered') {
     if(!notOrdered.length) return '<div class="no-data" style="color:var(--grn-dk)">모든 거래처가 이번 달 발주했습니다 ✓</div>';
     return notOrdered.map(c=>{
       const l=lastOrder(c.id);
-      return`<div class="li" onclick="closeSheet('sh-month');setTimeout(()=>openOrderDetail(${c.id}),180)">
+      return`<div class="li" onclick="closeSheet('sh-month');setTimeout(()=>openClientChart(${c.id}),180)">
         <div class="li-av" style="background:var(--amb-bg);color:var(--amb)">${c.name[0]}</div>
         <div class="li-main">
           <div class="li-name">${c.name}</div>
@@ -2320,7 +2320,7 @@ function openOverdueModal() {
 
   const listHTML = od.length
     ? od.map(c=>`
-      <div class="li" onclick="closeSheet('sh-overdue');setTimeout(()=>openOrderDetail(${c.id}),180)">
+      <div class="li" onclick="closeSheet('sh-overdue');setTimeout(()=>openClientChart(${c.id}),180)">
         <div class="li-av" style="background:var(--red-bg);color:var(--red)">!</div>
         <div class="li-main">
           <div class="li-name">${c.name}</div>
@@ -2866,20 +2866,36 @@ function renderInventory(){
     }).join('');
     sumEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px;">${tiles}</div>`;
   }
-  // 입고 이력
+  // 입고 이력 — 원두별 버튼 (선택 시 해당 원두 이력만 표시)
   const histEl=document.getElementById('inv-history');
-  const hist = filter ? inventory.filter(i=>i.bean===filter) : inventory;
-  const sorted=[...hist].sort((a,b)=>b.inDate.localeCompare(a.inDate));
-  histEl.innerHTML = sorted.length ? sorted.map(i=>`
-    <div class="li">
-      <div class="li-av" style="background:var(--amb-bg);color:var(--amb);">📥</div>
-      <div class="li-main">
-        <div class="li-name">${i.bean} · ${i.qty}kg</div>
-        <div class="li-sub">입고 ${i.inDate}${i.mfgDate?` · 제조 ${i.mfgDate}`:''}</div>
-      </div>
-      <div class="li-r"><button class="btn xs danger" onclick="deleteInventory(${i.id})">삭제</button></div>
-    </div>`).join('') : '<div class="no-data" style="padding:20px;">입고 이력 없음</div>';
+  const histBeans = filter ? [filter] : orderedBeans;
+  if(!histBeans.length){
+    histEl.innerHTML = '<div class="no-data" style="padding:20px;">입고 이력 없음</div>';
+  } else {
+    if(!window._invHistBean || !histBeans.includes(window._invHistBean)) window._invHistBean = histBeans[0];
+    const cur = window._invHistBean;
+    const tabs = histBeans.map(b=>{
+      const cnt = inventory.filter(i=>i.bean===b).length;
+      const active = b===cur;
+      const bEsc = b.replace(/'/g,"\\'");
+      return `<button onclick="setInvHistBean('${bEsc}')" style="padding:6px 12px;font-size:12px;font-weight:700;border-radius:100px;border:1.5px solid ${active?'var(--grn-dk)':'var(--bdr2)'};background:${active?'var(--grn-dk)':'var(--surf2)'};color:${active?'#fff':'var(--muted)'};cursor:pointer;white-space:nowrap;">${b} <span style="opacity:.7;font-weight:500;">${cnt}</span></button>`;
+    }).join('');
+    const rows = [...inventory.filter(i=>i.bean===cur)].sort((a,b)=>b.inDate.localeCompare(a.inDate));
+    const rowsHTML = rows.length ? rows.map(i=>`
+      <div class="li">
+        <div class="li-av" style="background:var(--amb-bg);color:var(--amb);">📥</div>
+        <div class="li-main">
+          <div class="li-name">${i.bean} · ${i.qty}kg</div>
+          <div class="li-sub">입고 ${i.inDate}${i.mfgDate?` · 제조 ${i.mfgDate}`:''}</div>
+        </div>
+        <div class="li-r"><button class="btn xs danger" onclick="deleteInventory(${i.id})">삭제</button></div>
+      </div>`).join('') : '<div class="no-data" style="padding:20px;">선택한 원두의 입고 이력이 없습니다</div>';
+    histEl.innerHTML = `
+      <div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 10px 4px;">${tabs}</div>
+      <div style="padding:6px 4px 4px;">${rowsHTML}</div>`;
+  }
 }
+function setInvHistBean(b){ window._invHistBean = b; renderInventory(); }
 
 // ═══════════════════════════════════════════════════════
 //  BEAN DETAIL MODAL — 원두별 입고이력 + FIFO 차감 상세
@@ -2941,13 +2957,17 @@ function openBeanDetail(bean){
       </div>
     </div>`;
 
-  // ─── 입고이력별 FIFO 차감 카드 ───
+  // ─── 입고이력별 FIFO 차감 카드 (최근 5건만 표시, 오래된 이력은 숨김) ───
+  const recentBatches = batches.slice(-5);
+  const hiddenCount = Math.max(0, batches.length - recentBatches.length);
   const batchesHTML = `
-    <div style="font-size:12px;font-weight:700;color:var(--muted);margin:14px 4px 8px;display:flex;align-items:center;gap:6px;">
+    <div style="font-size:12px;font-weight:700;color:var(--muted);margin:14px 4px 8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       📥 입고이력 (빠른 순서대로 차감)
       <span style="font-size:10px;font-weight:500;background:var(--surf2);color:var(--muted);padding:2px 7px;border-radius:100px;">FIFO 선입선출</span>
+      ${hiddenCount>0?`<span style="font-size:10px;font-weight:500;background:var(--bg);color:var(--hint);padding:2px 7px;border-radius:100px;">최근 5건 · 이전 ${hiddenCount}건 숨김</span>`:''}
     </div>
-    ${batches.map((b,idx)=>{
+    ${recentBatches.map((b,i)=>{
+      const idx = batches.indexOf(b);
       const bRatio = b.qty>0 ? b.remain/b.qty : 0;
       const bPct = (bRatio*100).toFixed(0);
       const status = b.exhausted ? '소진됨' : (b.used>0 ? '사용중' : '대기');
