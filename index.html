@@ -115,14 +115,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .stat-s{font-size:11px;color:var(--hint);margin-top:3px;}
 
 /* LIST */
-.li{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--bdr);background:var(--surf);cursor:pointer;transition:.12s;}
+.li{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-bottom:1px solid var(--bdr);background:var(--surf);cursor:pointer;transition:.12s;}
 .li:last-child{border-bottom:none;}
 .li:active{background:var(--surf2);}
 .li-av{width:40px;height:40px;border-radius:50%;background:var(--grn-bg);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:var(--grn-dk);flex-shrink:0;}
 .li-main{flex:1;min-width:0;}
 .li-name{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .li-sub{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.li-r{text-align:right;flex-shrink:0;}
+.li-r{text-align:right;flex-shrink:0;padding-top:2px;}
 .li-val{font-size:14px;font-weight:700;color:var(--grn-dk);}
 .li-sm{font-size:11px;color:var(--hint);margin-top:2px;}
 
@@ -2330,8 +2330,8 @@ function openMonthModal(tab='ordered') {
         <div class="li-main">
           <div class="li-name">${r.name}</div>
           <div class="li-sub">${r.manager} · ${r.cnt}회 발주 · 최근 ${r.lastDate}</div>
-          ${r.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);">📍 ${r.address}</div>`:''}
-          ${r.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;"><span style="color:var(--muted);">📝</span> ${r.memo}</div>`:''}
+          ${r.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${r.address}</div>`:''}
+          ${r.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${r.memo}</div>`:''}
         </div>
         <div class="li-r"><div class="li-val">${r.kg}kg</div><div class="li-sm">이번달</div></div>
       </div>`).join('');
@@ -2347,8 +2347,8 @@ function openMonthModal(tab='ordered') {
           <div class="li-name">${c.name}</div>
           <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
           <div style="margin-top:2px;font-size:11px;color:var(--hint)">${l?'마지막: '+l.date+' ('+daysAgo(l.date)+'일 전)':'발주 기록 없음'}</div>
-          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);">📍 ${c.address}</div>`:''}
-          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${c.address}</div>`:''}
+          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
         </div>
         <div class="li-r"><div class="li-val" style="color:var(--amb);font-size:12px;">미발주</div></div>
       </div>`;
@@ -2397,8 +2397,8 @@ function openOverdueModal() {
           <div class="li-name">${c.name}</div>
           <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
           <div style="margin-top:2px;font-size:11px;color:var(--hint)">${c.lastDate?c.lastDate+' 마지막 발주':'발주 기록 없음'}</div>
-          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);">📍 ${c.address}</div>`:''}
-          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${c.address}</div>`:''}
+          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
         </div>
         <div class="li-r">
           <div class="li-val" style="color:var(--red)">${c.days>=999?'없음':c.days+'일'}</div>
