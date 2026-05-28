@@ -1280,16 +1280,20 @@ function renderHome() {
   renderNotices();
   const allClients = filterByManager(clients);
   const active = allClients.filter(c=>c.status==='active');
-  const now=new Date(),m=now.getMonth(),y=now.getFullYear();
+  const now=new Date();
+  // 월 필터가 지정되어 있으면 해당 월을 "이번 달"로 사용, 아니면 현재 월
+  const useY = monthFilter ? parseInt(monthFilter.slice(0,4),10) : now.getFullYear();
+  const useM = monthFilter ? parseInt(monthFilter.slice(5,7),10)-1 : now.getMonth();
   const baseOrders = filterOrdersByManager(orders);
-  const mo=baseOrders.filter(o=>{const d=new Date(o.date||'');return d.getMonth()===m&&d.getFullYear()===y;});
+  const mo=baseOrders.filter(o=>{const d=new Date(o.date||'');return d.getMonth()===useM&&d.getFullYear()===useY;});
   const moClientIds=[...new Set(mo.map(o=>o.clientId))];
   const noOrderThisMonth=active.filter(c=>!moClientIds.includes(c.id));
   const mgrLabel = managerFilter ? ` (${managerFilter})` : '';
+  const monthLbl = monthFilter ? `${useY}년 ${useM+1}월 발주` : '이번 달 발주';
   document.getElementById('stat-grid').innerHTML=`
     <div class="stat"><div class="stat-l">전체 거래처${mgrLabel}</div><div class="stat-v">${allClients.length}</div><div class="stat-s">거래중 ${active.length}곳</div></div>
-    <div class="stat" style="cursor:pointer;" onclick="openMonthModal('ordered')"><div class="stat-l">이번 달 발주 ›</div><div class="stat-v">${moClientIds.length}<span style="font-size:14px;font-weight:400">곳</span></div><div class="stat-s">${mo.reduce((s,o)=>s+(o.qty||0),0)}kg · ${mo.length}건</div></div>
-    <div class="stat" style="cursor:pointer;" onclick="openMonthModal('none')"><div class="stat-l">미발주 거래처 ›</div><div class="stat-v" style="color:${noOrderThisMonth.length>0?'var(--amb)':'inherit'}">${noOrderThisMonth.length}<span style="font-size:14px;font-weight:400">곳</span></div><div class="stat-s">거래중 기준</div></div>
+    <div class="stat" style="cursor:pointer;" onclick="openMonthModal('ordered')"><div class="stat-l">${monthLbl} ›</div><div class="stat-v">${moClientIds.length}<span style="font-size:14px;font-weight:400">곳</span></div><div class="stat-s">${mo.reduce((s,o)=>s+(o.qty||0),0)}kg · ${mo.length}건</div></div>
+    <div class="stat" style="cursor:pointer;" onclick="openMonthModal('none')"><div class="stat-l">미발주 거래처 ›</div><div class="stat-v" style="color:${noOrderThisMonth.length>0?'var(--amb)':'inherit'}">${noOrderThisMonth.length}<span style="font-size:14px;font-weight:400">곳</span></div><div class="stat-s">${monthFilter?'해당 월 기준':'거래중 기준'}</div></div>
     <div class="stat" style="cursor:pointer;" onclick="openOverdueModal()"><div class="stat-l">지연 주의 ›</div><div class="stat-v" style="color:${active.filter(isOD).length>0?'var(--red)':'inherit'}">${active.filter(isOD).length}<span style="font-size:14px;font-weight:400">곳</span></div><div class="stat-s">주기 초과</div></div>`;
   const tmCids=[...new Set(mo.map(o=>o.clientId))];
   document.getElementById('home-month').innerHTML=tmCids.length
@@ -2299,7 +2303,9 @@ async function deleteOrder(){
 //  HOME MODAL: 이번 달 발주 / 미발주 탭
 // ═══════════════════════════════════════════════════════
 function openMonthModal(tab='ordered') {
-  const now=new Date(), m=now.getMonth(), y=now.getFullYear();
+  const now=new Date();
+  const y = monthFilter ? parseInt(monthFilter.slice(0,4),10) : now.getFullYear();
+  const m = monthFilter ? parseInt(monthFilter.slice(5,7),10)-1 : now.getMonth();
   const mo=filterOrdersByManager(orders).filter(o=>{const d=new Date(o.date||'');return d.getMonth()===m&&d.getFullYear()===y;});
   const active=filterByManager(clients).filter(c=>c.status==='active');
   const orderedIds=[...new Set(mo.map(o=>o.clientId))];
@@ -2325,15 +2331,19 @@ function openMonthModal(tab='ordered') {
       const lastDate=[...clientOrders].sort((a,b)=>b.date.localeCompare(a.date))[0]?.date||'-';
       return{cid,name,manager,cnt:clientOrders.length,kg,lastDate,memo,address};
     }).sort((a,b)=>b.kg-a.kg).map(r=>`
-      <div class="li" onclick="closeSheet('sh-month');setTimeout(()=>openOrderDetail(${r.cid}),180)">
-        <div class="li-av">${r.name[0]}</div>
-        <div class="li-main">
-          <div class="li-name">${r.name}</div>
-          <div class="li-sub">${r.manager} · ${r.cnt}회 발주 · 최근 ${r.lastDate}</div>
-          ${r.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${r.address}</div>`:''}
-          ${r.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${r.memo}</div>`:''}
+      <div class="li" style="display:block;padding:12px 14px;" onclick="closeSheet('sh-month');setTimeout(()=>openOrderDetail(${r.cid}),180)">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div class="li-av">${r.name[0]}</div>
+          <div class="li-main">
+            <div class="li-name">${r.name}</div>
+            <div class="li-sub">${r.manager} · ${r.cnt}회 발주 · 최근 ${r.lastDate}</div>
+          </div>
+          <div class="li-r"><div class="li-val">${r.kg}kg</div><div class="li-sm">이번달</div></div>
         </div>
-        <div class="li-r"><div class="li-val">${r.kg}kg</div><div class="li-sm">이번달</div></div>
+        ${(r.address||r.memo)?`<div style="margin-top:6px;padding-left:50px;">
+          ${r.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-all;overflow-wrap:anywhere;line-height:1.45;">📍 ${r.address}</div>`:''}
+          ${r.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-all;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${r.memo}</div>`:''}
+        </div>`:''}
       </div>`).join('');
   }
 
@@ -2341,16 +2351,20 @@ function openMonthModal(tab='ordered') {
     if(!notOrdered.length) return '<div class="no-data" style="color:var(--grn-dk)">모든 거래처가 이번 달 발주했습니다 ✓</div>';
     return notOrdered.map(c=>{
       const l=lastOrder(c.id);
-      return`<div class="li" onclick="closeSheet('sh-month');setTimeout(()=>openClientChart(${c.id}),180)">
-        <div class="li-av" style="background:var(--amb-bg);color:var(--amb)">${c.name[0]}</div>
-        <div class="li-main">
-          <div class="li-name">${c.name}</div>
-          <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
-          <div style="margin-top:2px;font-size:11px;color:var(--hint)">${l?'마지막: '+l.date+' ('+daysAgo(l.date)+'일 전)':'발주 기록 없음'}</div>
-          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${c.address}</div>`:''}
-          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+      return`<div class="li" style="display:block;padding:12px 14px;" onclick="closeSheet('sh-month');setTimeout(()=>openClientChart(${c.id}),180)">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div class="li-av" style="background:var(--amb-bg);color:var(--amb)">${c.name[0]}</div>
+          <div class="li-main">
+            <div class="li-name">${c.name}</div>
+            <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
+            <div style="margin-top:2px;font-size:11px;color:var(--hint)">${l?'마지막: '+l.date+' ('+daysAgo(l.date)+'일 전)':'발주 기록 없음'}</div>
+          </div>
+          <div class="li-r"><div class="li-val" style="color:var(--amb);font-size:12px;">미발주</div></div>
         </div>
-        <div class="li-r"><div class="li-val" style="color:var(--amb);font-size:12px;">미발주</div></div>
+        ${(c.address||c.memo)?`<div style="margin-top:6px;padding-left:50px;">
+          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-all;overflow-wrap:anywhere;line-height:1.45;">📍 ${c.address}</div>`:''}
+          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-all;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+        </div>`:''}
       </div>`;
     }).join('');
   }
@@ -2391,19 +2405,23 @@ function openOverdueModal() {
 
   const listHTML = od.length
     ? od.map(c=>`
-      <div class="li" onclick="closeSheet('sh-overdue');setTimeout(()=>openClientChart(${c.id}),180)">
-        <div class="li-av" style="background:var(--red-bg);color:var(--red)">!</div>
-        <div class="li-main">
-          <div class="li-name">${c.name}</div>
-          <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
-          <div style="margin-top:2px;font-size:11px;color:var(--hint)">${c.lastDate?c.lastDate+' 마지막 발주':'발주 기록 없음'}</div>
-          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-word;overflow-wrap:anywhere;">📍 ${c.address}</div>`:''}
-          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-word;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+      <div class="li" style="display:block;padding:12px 14px;" onclick="closeSheet('sh-overdue');setTimeout(()=>openClientChart(${c.id}),180)">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div class="li-av" style="background:var(--red-bg);color:var(--red)">!</div>
+          <div class="li-main">
+            <div class="li-name">${c.name}</div>
+            <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
+            <div style="margin-top:2px;font-size:11px;color:var(--hint)">${c.lastDate?c.lastDate+' 마지막 발주':'발주 기록 없음'}</div>
+          </div>
+          <div class="li-r">
+            <div class="li-val" style="color:var(--red)">${c.days>=999?'없음':c.days+'일'}</div>
+            <div class="li-sm">경과</div>
+          </div>
         </div>
-        <div class="li-r">
-          <div class="li-val" style="color:var(--red)">${c.days>=999?'없음':c.days+'일'}</div>
-          <div class="li-sm">경과</div>
-        </div>
+        ${(c.address||c.memo)?`<div style="margin-top:6px;padding-left:50px;">
+          ${c.address?`<div style="margin-top:4px;font-size:12px;color:var(--grn-dk);word-break:break-all;overflow-wrap:anywhere;line-height:1.45;">📍 ${c.address}</div>`:''}
+          ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-all;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
+        </div>`:''}
       </div>`).join('')
     : '<div class="no-data" style="color:var(--grn-dk);padding:8px 0">기준 내 모든 거래처가 정상입니다 ✓</div>';
 
