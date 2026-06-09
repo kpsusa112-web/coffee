@@ -387,10 +387,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <input type="text" id="o-search" placeholder="거래처명·담당자·원두·주소·메모로 검색..."
         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
         style="width:100%;padding:11px 38px 11px 13px;font-size:16px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);-webkit-appearance:none;box-sizing:border-box;"
-        oninput="orderSearchLive()" onkeyup="orderSearchLive()" oncompositionend="setTimeout(orderSearchLive,0)" onkeydown="if(event.key==='Enter'){orderSearchExec();this.blur();}">
+        oninput="orderSearchLive()" onkeyup="orderSearchLive()" oncompositionend="setTimeout(orderSearchLive,0)" onkeydown="if(event.key==='Enter'){event.preventDefault();orderSearchExec();}">
       <span id="o-clear" onclick="orderSearchClear()" style="display:none;position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:17px;color:var(--muted);cursor:pointer;line-height:1;padding:4px;">✕</span>
     </div>
-    <button onclick="orderSearchExec()" style="flex-shrink:0;width:46px;height:46px;border-radius:var(--r);border:1px solid var(--bdr2);background:var(--surf);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🔍</button>
+    <button type="button" onclick="orderSearchExec()" style="flex-shrink:0;width:46px;height:46px;border-radius:var(--r);border:1px solid var(--bdr2);background:var(--surf);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🔍</button>
   </div>
   <div style="display:flex;gap:7px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
     <select id="o-bean" onchange="renderOrders()" style="flex:1;padding:9px 10px;font-size:13px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
@@ -854,7 +854,7 @@ function loadLocal() {
       const qty = Number(o.qty)||0, price = Number(o.price)||0;
       return { ...o, date: normalizeDate(o.date), qty, price, amount: Number(o.amount) || Math.round(qty*price) };
     });
-    clients = clients.map(c => ({ ...c, openDate: normalizeDate(c.openDate) }));
+    clients = clients.map(c => normalizeClientRecord(c));
   }
   nextCid = Math.max(0,...clients.map(c=>c.id))+1;
   nextOid = Math.max(0,...orders.map(o=>o.id))+1;
@@ -897,6 +897,51 @@ function normalizeDate(v){
   return s.slice(0,10);
 }
 
+function pickFirstText(obj, exactKeys, fuzzyKeys=[]) {
+  if (!obj || typeof obj !== 'object') return '';
+  for (const key of exactKeys) {
+    const v = obj[key];
+    if (v === 0) return '0';
+    if (v !== null && v !== undefined && String(v).trim()) return String(v).trim();
+  }
+  for (const rawKey of Object.keys(obj)) {
+    const normKey = String(rawKey).toLowerCase().replace(/[\s_-]/g,'');
+    if (!fuzzyKeys.some(k => normKey.includes(k))) continue;
+    const v = obj[rawKey];
+    if (v === 0) return '0';
+    if (v !== null && v !== undefined && String(v).trim()) return String(v).trim();
+  }
+  return '';
+}
+
+function normalizeClientRecord(c) {
+  if (!c || typeof c !== 'object') return c;
+  const normalized = { ...c };
+  normalized.name = pickFirstText(c, ['name','거래처명'], ['거래처명','clientname']) || c.name || '';
+  normalized.manager = pickFirstText(c, ['manager','담당자'], ['담당자','manager']) || '';
+  normalized.phone = pickFirstText(c, ['phone','연락처'], ['연락처','phone','tel']) || '';
+  normalized.address = pickFirstText(c, ['address','addr','주소'], ['address','addr','주소','location']) || '';
+  normalized.memo = pickFirstText(c, ['memo','note','notes','remark','remarks','comment','메모','비고'], ['memo','note','remark','comment','메모','비고']) || '';
+  normalized.openDate = normalizeDate(c.openDate || c['개설일'] || '');
+  normalized.status = pickFirstText(c, ['status','상태'], ['status','상태']) || c.status || 'active';
+  normalized.cycle = pickFirstText(c, ['cycle','발주 주기'], ['cycle','주기']) || c.cycle || 'custom';
+  normalized.beans = Array.isArray(c.beans)
+    ? c.beans
+    : (c.beans || c['사용 원두'] || '').split(',').map(b=>String(b).trim()).filter(Boolean);
+  return normalized;
+}
+
+function mergeClientDetails(nextClient, prevClient) {
+  if (!prevClient) return nextClient;
+  return {
+    ...nextClient,
+    address: nextClient.address || prevClient.address || '',
+    memo: nextClient.memo || prevClient.memo || '',
+    phone: nextClient.phone || prevClient.phone || '',
+    manager: nextClient.manager || prevClient.manager || '',
+  };
+}
+
 async function syncNow() {
   if (!API_URL) return;
   setSyncBadge('syncing');
@@ -906,12 +951,14 @@ async function syncNow() {
     if (data.error) throw new Error(data.error);
     if (data.clients?.length) {
       const rawCN = data.clients.length;
+      const prevById = new Map(clients.map(c => [String(c.id), c]));
+      const prevByName = new Map(clients.map(c => [String(c.name||'').trim(), c]));
       clients = data.clients
-        .map(c=>({
-          ...c,
-          openDate: normalizeDate(c.openDate),
-          beans: Array.isArray(c.beans)?c.beans:(c.beans||'').split(',').map(b=>b.trim()).filter(Boolean)
-        }))
+        .map(c=>{
+          const normalized = normalizeClientRecord(c);
+          const prev = prevById.get(String(normalized.id)) || prevByName.get(String(normalized.name||'').trim()) || null;
+          return mergeClientDetails(normalized, prev);
+        })
         // 시트 빈 행 제거 (이름 없는 거래처)
         .filter(c => c && c.name && String(c.name).trim());
       const droppedC = rawCN - clients.length;
@@ -1418,16 +1465,7 @@ function fuzzyMatch(str, q) {
   str = (str||'').toLowerCase().replace(/\s/g,'');
   q   = q.toLowerCase().replace(/\s/g,'').trim();
   if (!q) return true;
-  if (str.includes(q)) return true;
-  // 글자 순서 포함 (2글자 이상일 때만)
-  if (q.length >= 2) {
-    let si = 0;
-    for (let ci = 0; ci < str.length && si < q.length; ci++) {
-      if (str[ci] === q[si]) si++;
-    }
-    if (si === q.length) return true;
-  }
-  return false;
+  return str.includes(q);
 }
 
 function highlightMatch(str, q) {
@@ -1518,32 +1556,34 @@ let orderClientFilter = null;
 let _orderSearchTimer = null;
 
 function orderSearchLive() {
-  const newQ = (document.getElementById('o-search')?.value||'');
-  const wasEmpty = !orderSearchQuery.trim();
-  orderSearchQuery = newQ;
-  orderClientFilter = null; // 입력 시 이전 자동완성 잠금 해제
-  // 검색을 새로 시작할 때(빈 상태 → 입력) 월/주차 필터를 자동 해제하여 항상 결과가 보이도록
-  if (wasEmpty && newQ.trim()) {
-    if (selectedOrderMonths.size > 0) selectedOrderMonths.clear();
-    orderWeekFilter = 0;
-    const wrap = document.getElementById('o-week-wrap');
-    if (wrap) wrap.style.display = 'none';
-    updateOrderWeekUI && updateOrderWeekUI();
-  }
+  // 실시간 검색 비활성화 — 입력 중에는 ✕ 버튼 표시만 갱신, 검색은 돋보기/Enter 클릭 시 실행
+  const v = (document.getElementById('o-search')?.value||'');
   const cl = document.getElementById('o-clear');
-  if(cl) cl.style.display = orderSearchQuery ? 'block':'none';
-  // 대용량 데이터(수천 건) 동기 렌더링 시 입력이 끊기는 문제 방지 → 디바운스
-  if (_orderSearchTimer) clearTimeout(_orderSearchTimer);
-  _orderSearchTimer = setTimeout(() => { _orderSearchTimer = null; renderOrders(); }, 120);
+  if(cl) cl.style.display = v ? 'block':'none';
 }
+
 function orderSearchExec() {
   if (_orderSearchTimer) { clearTimeout(_orderSearchTimer); _orderSearchTimer = null; }
-  orderSearchQuery = (document.getElementById('o-search')?.value||'').trim();
-  const cl = document.getElementById('o-clear');
-  if(cl) cl.style.display = orderSearchQuery ? 'block':'none';
-  document.getElementById('o-search')?.blur();
-  renderOrders();
+  const inp = document.getElementById('o-search');
+  inp?.blur();
+  setTimeout(() => {
+    const newQ = (inp?.value||'').trim();
+    orderSearchQuery = newQ;
+    orderClientFilter = null;
+    // 검색 실행 시 월/주차 필터 자동 해제 — 결과가 가려지지 않게
+    if (newQ) {
+      if (selectedOrderMonths.size > 0) selectedOrderMonths.clear();
+      orderWeekFilter = 0;
+      const wrap = document.getElementById('o-week-wrap');
+      if (wrap) wrap.style.display = 'none';
+      updateOrderWeekUI && updateOrderWeekUI();
+    }
+    const cl = document.getElementById('o-clear');
+    if(cl) cl.style.display = orderSearchQuery ? 'block':'none';
+    renderOrders();
+  }, 0);
 }
+
 function orderSearchClear() {
   if (_orderSearchTimer) { clearTimeout(_orderSearchTimer); _orderSearchTimer = null; }
   const inp = document.getElementById('o-search');
@@ -1691,7 +1731,9 @@ function renderOrders() {
       clients.filter(c =>
         fuzzyMatch(c.name, q) ||
         fuzzyMatch(c.manager || '', q) ||
-        fuzzyMatch(c.memo    || '', q)   // 거래처 탭과 동일하게 메모(주소 등)도 검색
+        fuzzyMatch(c.address || '', q) ||
+        fuzzyMatch(c.memo    || '', q) ||
+        fuzzyMatch(c.phone   || '', q)
       ).map(c => c.id)
     );
     f = f.filter(o => matchedIds.has(o.clientId)
@@ -1711,7 +1753,9 @@ function renderOrders() {
     let mBase = orders.slice();
     if (q) {
       const ids = new Set(clients.filter(c =>
-        fuzzyMatch(c.name, q) || fuzzyMatch(c.manager || '', q) || fuzzyMatch(c.memo || '', q)
+        fuzzyMatch(c.name, q) || fuzzyMatch(c.manager || '', q) ||
+        fuzzyMatch(c.address || '', q) || fuzzyMatch(c.memo || '', q) ||
+        fuzzyMatch(c.phone || '', q)
       ).map(c => c.id));
       mBase = mBase.filter(o => ids.has(o.clientId)
         || fuzzyMatch(o.clientName || '', q)
@@ -1996,7 +2040,7 @@ function openOrderDetail(cid) {
         </div>
       </div>`;}).join('') || '<div class="no-data">발주 이력 없음</div>'}
     <div style="margin-top:14px;display:flex;gap:8px;">
-      <button class="btn sm" style="flex:1;" onclick="closeSheet('sh-order-detail');openClientChart(${cid})">📊 이력 차트</button>
+      <button class="btn sm" style="flex:1;" onclick="closeSheet('sh-order-detail');setTimeout(()=>openClientChart(${cid}),200)">📊 이력 차트</button>
       <button class="btn sm green" style="flex:1;" onclick="closeSheet('sh-order-detail');openAddOrderFor(${cid})">+ 발주 추가</button>
     </div>`;
   document.getElementById('sh-order-detail').classList.add('open');
@@ -2518,9 +2562,10 @@ function openClientChart(cid) {
           <span style="font-weight:700;color:var(--grn-dk)">${o.qty||0}kg</span>
         </div>`).join('')||'<div class="no-data">발주 기록 없음</div>'}</div>
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px;">
-      <button class="btn sm" style="flex:1;" onclick="closeSheet('sh-chart');openEditClient(${cid})">✏️ 거래처 수정</button>
-      <button class="btn sm green" style="flex:1;" onclick="closeSheet('sh-chart');openAddOrderFor(${cid})">+ 발주 추가</button>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn sm" style="flex:1;min-width:110px;" onclick="closeSheet('sh-chart');setTimeout(()=>openOrderDetail(${cid}),200)">📋 발주 내역</button>
+      <button class="btn sm" style="flex:1;min-width:110px;" onclick="closeSheet('sh-chart');openEditClient(${cid})">✏️ 거래처 수정</button>
+      <button class="btn sm green" style="flex:1;min-width:110px;" onclick="closeSheet('sh-chart');openAddOrderFor(${cid})">+ 발주 추가</button>
     </div>`;
   document.getElementById('sh-chart').classList.add('open');
   // 모바일 시트 슬라이드 애니메이션 후 캔버스 폭이 결정되므로 충분히 대기
