@@ -455,6 +455,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="card"><div class="card-bd"><div class="bar-wrap" id="a-months"></div></div></div>
   <div class="sec-title" id="a-week-title">주차별 패턴 (최근 20주)</div>
   <div class="card"><div class="card-bd"><div class="wk-grid" id="a-weeks"></div></div></div>
+
+  <!-- 월별 주단위 예상 vs 실제 -->
+  <div class="sec-title" style="display:flex;align-items:center;justify-content:space-between;">
+    <span id="a-forecast-title">📈 월별 주단위 예상 (매출/발주량)</span>
+    <span style="display:inline-flex;gap:4px;">
+      <button class="btn xs" id="fc-mode-qty" onclick="setForecastMode('qty')">발주량</button>
+      <button class="btn xs" id="fc-mode-rev" onclick="setForecastMode('rev')">매출</button>
+    </span>
+  </div>
+  <div class="card"><div class="card-bd" id="a-forecast"></div></div>
   <div class="sec-title">사용량 순위</div>
   <div class="card" id="a-rank"></div>
 
@@ -773,6 +783,25 @@ function setOverdueWeeks(w) {
   if(document.getElementById('sh-overdue').classList.contains('open')) openOverdueModal();
 }
 function isOD(c) { const l=lastOrder(c.id); return (overdueWeeks*7) < daysAgo(l?l.date:null); }
+// 거래처별 실측 평균 발주 주기 (일) — 발주 2회 이상일 때만
+function avgCycleDays(cid) {
+  const ds=[...new Set(orders.filter(o=>o.clientId===cid).map(o=>o.date).filter(Boolean))].sort();
+  if(ds.length<2) return null;
+  let sm=0; for(let i=1;i<ds.length;i++) sm+=(new Date(ds[i])-new Date(ds[i-1]))/86400000;
+  return Math.round(sm/(ds.length-1));
+}
+// 실측 평균주기 기준 지연 여부
+function isODActual(c) {
+  const avg=avgCycleDays(c.id); if(avg==null) return false;
+  const l=lastOrder(c.id); const d=daysAgo(l?l.date:null);
+  return d>avg;
+}
+let overdueMode = localStorage.getItem('crm_od_mode') || 'fixed';
+function setOverdueMode(m) {
+  overdueMode = (m==='actual')?'actual':'fixed';
+  localStorage.setItem('crm_od_mode', overdueMode);
+  openOverdueModal();
+}
 function renderOverdueWeekBtns() {
   const sl = document.getElementById('od-slider');
   const lab = document.getElementById('od-week-val');
@@ -2160,6 +2189,7 @@ function renderAnalytics() {
         + bs.map(([b,n])=>`<div class="li"><div class="li-av" style="font-size:18px;background:var(--amb-bg)">☕</div><div class="li-main"><div class="li-name">${b}</div></div><div class="li-r"><div class="li-val">${n}kg</div></div></div>`).join('')
       : '<div style="padding:14px"><div class="no-data">발주 기록 없음</div></div>';
   }
+  renderForecast(targetOrders);
   renderCycleAnalysis();
 }
 
@@ -2432,13 +2462,29 @@ function monthModalSwitch(tab) {
 // ═══════════════════════════════════════════════════════
 function openOverdueModal() {
   const active=filterByManager(clients).filter(c=>c.status==='active');
-  const od=active.filter(isOD).map(c=>{
-    const l=lastOrder(c.id);
-    return{...c,lastDate:l?l.date:null,days:daysAgo(l?l.date:null)};
-  }).sort((a,b)=>b.days-a.days);
+  const useActual = overdueMode==='actual';
+  let od;
+  if(useActual){
+    od=active.filter(isODActual).map(c=>{
+      const l=lastOrder(c.id);
+      return{...c,lastDate:l?l.date:null,days:daysAgo(l?l.date:null),avg:avgCycleDays(c.id)};
+    }).sort((a,b)=>(b.days-b.avg)-(a.days-a.avg));
+  } else {
+    od=active.filter(isOD).map(c=>{
+      const l=lastOrder(c.id);
+      return{...c,lastDate:l?l.date:null,days:daysAgo(l?l.date:null),avg:avgCycleDays(c.id)};
+    }).sort((a,b)=>b.days-a.days);
+  }
 
-  // 모달 내 기준 변경 버튼
-  const weekSelector=`
+  // 모드 토글 (설정 주기 / 실측 평균주기)
+  const modeToggle=`
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <button onclick="setOverdueMode('fixed')" style="flex:1;padding:8px 10px;font-size:12px;font-weight:700;border-radius:8px;border:1.5px solid ${!useActual?'var(--red)':'var(--bdr2)'};background:${!useActual?'var(--red)':'var(--surf2)'};color:${!useActual?'#fff':'var(--muted)'};cursor:pointer;">설정 주기 기준</button>
+      <button onclick="setOverdueMode('actual')" style="flex:1;padding:8px 10px;font-size:12px;font-weight:700;border-radius:8px;border:1.5px solid ${useActual?'var(--red)':'var(--bdr2)'};background:${useActual?'var(--red)':'var(--surf2)'};color:${useActual?'#fff':'var(--muted)'};cursor:pointer;">📊 실측 평균주기</button>
+    </div>`;
+
+  // 주차 선택 (설정 주기 모드에서만)
+  const weekSelector= useActual ? '' : `
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
       <span style="font-size:12px;color:var(--muted);flex-shrink:0;">기준:</span>
       ${[5,10,15,20].map(w=>`
@@ -2447,6 +2493,8 @@ function openOverdueModal() {
       <span style="font-size:11px;color:var(--muted);margin-left:2px;">(${overdueWeeks*7}일 이상 미발주)</span>
     </div>`;
 
+  const actualHint = useActual ? `<div style="margin-bottom:10px;padding:8px 10px;background:var(--surf2);border-radius:8px;font-size:11px;color:var(--muted);line-height:1.5;">거래처별 실제 발주 간격 평균을 초과한 거래처만 표시 (발주 2회 이상)</div>` : '';
+
   const listHTML = od.length
     ? od.map(c=>`
       <div class="li" style="display:block;padding:12px 14px;" onclick="closeSheet('sh-overdue');setTimeout(()=>openClientChart(${c.id}),180)">
@@ -2454,12 +2502,12 @@ function openOverdueModal() {
           <div class="li-av" style="background:var(--red-bg);color:var(--red)">!</div>
           <div class="li-main">
             <div class="li-name">${c.name}</div>
-            <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}</div>
+            <div class="li-sub">${c.manager||'-'} · ${CL[c.cycle]||c.cycle}${useActual&&c.avg!=null?` · <span style="color:var(--grn-dk);font-weight:600;">평균 ${c.avg}일</span>`:''}</div>
             <div style="margin-top:2px;font-size:11px;color:var(--hint)">${c.lastDate?c.lastDate+' 마지막 발주':'발주 기록 없음'}</div>
           </div>
           <div class="li-r">
             <div class="li-val" style="color:var(--red)">${c.days>=999?'없음':c.days+'일'}</div>
-            <div class="li-sm">경과</div>
+            <div class="li-sm">${useActual&&c.avg!=null?`+${c.days-c.avg}일 초과`:'경과'}</div>
           </div>
         </div>
         ${(c.address||c.memo)?`<div style="margin-top:6px;padding-left:50px;">
@@ -2467,9 +2515,9 @@ function openOverdueModal() {
           ${c.memo?`<div style="margin-top:4px;padding:6px 8px;background:var(--surf2);border-radius:6px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.45;word-break:break-all;overflow-wrap:anywhere;"><span style="color:var(--muted);">📝</span> ${c.memo}</div>`:''}
         </div>`:''}
       </div>`).join('')
-    : '<div class="no-data" style="color:var(--grn-dk);padding:8px 0">기준 내 모든 거래처가 정상입니다 ✓</div>';
+    : `<div class="no-data" style="color:var(--grn-dk);padding:8px 0">${useActual?'실측 평균주기를 초과한 거래처가 없습니다 ✓':'기준 내 모든 거래처가 정상입니다 ✓'}</div>`;
 
-  document.getElementById('sh-overdue-body').innerHTML = weekSelector +
+  document.getElementById('sh-overdue-body').innerHTML = modeToggle + weekSelector + actualHint +
     `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">${od.length}곳 해당 — 탭하면 발주이력 확인</div>` +
     listHTML;
   document.getElementById('sh-overdue').classList.add('open');
@@ -3172,6 +3220,145 @@ function openBeanDetail(bean){
 
   bodyEl.innerHTML = summaryHTML + batchesHTML + footHTML;
   document.getElementById('sh-bean-detail').classList.add('open');
+}
+
+// ═══════════════════════════════════════════════════════
+//  FORECAST — 월별 주단위 예상 매출/발주량 & 실제 정확도
+// ═══════════════════════════════════════════════════════
+let forecastMode = localStorage.getItem('forecastMode') || 'qty';
+function setForecastMode(m){
+  forecastMode = m;
+  localStorage.setItem('forecastMode', m);
+  renderAnalytics();
+}
+// 주차 시작일(일요일) 키: YYYY-MM-DD
+function weekStartISO(d){
+  const x = new Date(d); x.setHours(0,0,0,0);
+  x.setDate(x.getDate() - x.getDay());
+  return x.toISOString().slice(0,10);
+}
+function addDaysISO(iso, n){
+  const d = new Date(iso); d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+function renderForecast(targetOrders){
+  const el = document.getElementById('a-forecast');
+  if(!el) return;
+  // 모드 버튼 상태
+  ['qty','rev'].forEach(m=>{
+    const b = document.getElementById('fc-mode-'+m);
+    if(b){ b.style.background = (forecastMode===m)?'var(--grn)':''; b.style.color=(forecastMode===m)?'#fff':''; }
+  });
+
+  if(!targetOrders.length){ el.innerHTML = '<div class="no-data" style="padding:14px;">발주 데이터 없음</div>'; return; }
+
+  // 주별 실제 집계
+  const weekly = {}; // wkStart -> {qty, rev}
+  targetOrders.forEach(o=>{
+    if(!o.date) return;
+    const ws = weekStartISO(o.date);
+    if(!weekly[ws]) weekly[ws] = {qty:0, rev:0};
+    weekly[ws].qty += (o.qty||0);
+    weekly[ws].rev += (o.amount || (o.qty*o.price) || 0);
+  });
+
+  // 분석 대상 주 범위: 최근 6개월 시작주 ~ 다음 달 끝주
+  const today = new Date();
+  const startMonth = new Date(today.getFullYear(), today.getMonth()-5, 1);
+  const endMonth   = new Date(today.getFullYear(), today.getMonth()+2, 0); // 다음달 말일
+  const allWeeks = [];
+  let cur = weekStartISO(startMonth);
+  const endISO = weekStartISO(endMonth);
+  while(cur <= endISO){
+    allWeeks.push(cur);
+    cur = addDaysISO(cur, 7);
+  }
+
+  // 정렬된 과거 주별 시계열 (실제 발생 주만)
+  const sortedKeys = Object.keys(weekly).sort();
+
+  // 예측: 같은 요일주의 작년(±1주) 평균 + 최근 8주 이동평균을 블렌딩
+  function predict(wkStart, key){
+    const wsDate = new Date(wkStart);
+    // 최근 8주 이동평균 (예측 대상 직전까지)
+    const recent = sortedKeys.filter(k=>k < wkStart).slice(-8);
+    const ma = recent.length ? recent.reduce((s,k)=>s+weekly[k][key],0)/recent.length : 0;
+    // 작년 동일 시점 ±1주
+    const yKeys = [-7,0,7].map(off=>{
+      const d = new Date(wsDate); d.setDate(d.getDate()-365+off);
+      return weekStartISO(d);
+    });
+    const yVals = yKeys.map(k=>weekly[k]?weekly[k][key]:null).filter(v=>v!=null);
+    const seasonal = yVals.length ? yVals.reduce((a,b)=>a+b,0)/yVals.length : null;
+    if(seasonal!=null && recent.length>=4) return Math.round(seasonal*0.5 + ma*0.5);
+    return Math.round(ma);
+  }
+
+  // 월별 그룹
+  const months = {}; // 'YYYY-MM' -> {weeks:[{ws, end, act, pred}], isFuture}
+  const todayISO = today.toISOString().slice(0,10);
+  allWeeks.forEach(ws=>{
+    const wsDate = new Date(ws);
+    const mk = wsDate.getFullYear()+'-'+String(wsDate.getMonth()+1).padStart(2,'0');
+    if(!months[mk]) months[mk] = {weeks:[], y:wsDate.getFullYear(), m:wsDate.getMonth()};
+    const end = addDaysISO(ws, 6);
+    const isPast = end < todayISO;
+    const isCurrent = ws <= todayISO && todayISO <= end;
+    const act = weekly[ws] ? weekly[ws][forecastMode] : 0;
+    const pred = predict(ws, forecastMode);
+    months[mk].weeks.push({ws, end, act, pred, isPast, isCurrent, hasAct: !!weekly[ws]});
+  });
+
+  const unit = forecastMode==='qty' ? 'kg' : '원';
+  const fmt = v => forecastMode==='qty' ? (Math.round(v*10)/10)+'kg' : '₩'+(v||0).toLocaleString();
+  const fmtShort = v => forecastMode==='qty' ? Math.round(v)+'kg' : '₩'+Math.round((v||0)/1000)+'k';
+
+  // 렌더
+  const sortedMonths = Object.keys(months).sort();
+  let html = '';
+  sortedMonths.forEach(mk=>{
+    const grp = months[mk];
+    const totalAct = grp.weeks.reduce((s,w)=>s+(w.hasAct?w.act:0),0);
+    const totalPred = grp.weeks.reduce((s,w)=>s+w.pred,0);
+    const pastWeeks = grp.weeks.filter(w=>w.isPast);
+    let accStr = '';
+    if(pastWeeks.length){
+      const actSum = pastWeeks.reduce((s,w)=>s+w.act,0);
+      const predSum = pastWeeks.reduce((s,w)=>s+w.pred,0);
+      if(actSum>0){
+        const acc = Math.max(0, 100 - Math.abs(actSum-predSum)/actSum*100);
+        const color = acc>=85?'var(--grn-dk)':acc>=70?'var(--amb)':'var(--red)';
+        accStr = `<span style="color:${color};font-weight:700;font-size:11px;">정확도 ${acc.toFixed(1)}%</span>`;
+      }
+    }
+    const isFuture = grp.weeks.every(w=>!w.isPast && !w.isCurrent);
+    html += `<div style="border-top:1px solid var(--bdr);padding:10px 4px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div style="font-weight:800;font-size:14px;">${grp.y}.${MN[grp.m]} ${isFuture?'<span style="font-size:10px;color:var(--amb);font-weight:600;">(예측)</span>':''}</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${accStr}
+          <div style="font-size:11px;color:var(--muted);">실제 <b style="color:var(--txt)">${fmtShort(totalAct)}</b> / 예상 <b style="color:var(--txt)">${fmtShort(totalPred)}</b></div>
+        </div>
+      </div>`;
+    grp.weeks.forEach((w,i)=>{
+      const lbl = `W${i+1} (${w.ws.slice(5).replace('-','/')}~${w.end.slice(5).replace('-','/')})`;
+      const mx = Math.max(w.act, w.pred, 1);
+      const actPct = Math.round(w.act/mx*100);
+      const predPct = Math.round(w.pred/mx*100);
+      const showAct = w.isPast || w.isCurrent;
+      const diff = w.hasAct ? (w.act - w.pred) : null;
+      const diffStr = diff!=null ? `<span style="font-size:10px;color:${diff>=0?'var(--grn-dk)':'var(--red)'};margin-left:4px;">${diff>=0?'+':''}${fmtShort(diff)}</span>` : '';
+      html += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;">
+        <div style="width:110px;color:var(--muted);">${lbl}${w.isCurrent?' <span style="color:var(--amb);font-weight:700;">●</span>':''}</div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:2px;">
+          ${showAct?`<div style="display:flex;align-items:center;gap:4px;"><span style="width:28px;font-size:9px;color:var(--muted);">실제</span><div style="flex:1;height:8px;background:var(--bdr);border-radius:3px;overflow:hidden;"><div style="width:${actPct}%;height:100%;background:var(--grn);"></div></div><span style="width:70px;text-align:right;font-weight:700;">${fmt(w.act)}</span></div>`:''}
+          <div style="display:flex;align-items:center;gap:4px;"><span style="width:28px;font-size:9px;color:var(--muted);">예상</span><div style="flex:1;height:8px;background:var(--bdr);border-radius:3px;overflow:hidden;"><div style="width:${predPct}%;height:100%;background:var(--amb);opacity:.7;"></div></div><span style="width:70px;text-align:right;font-weight:600;color:var(--muted);">${fmt(w.pred)}${diffStr}</span></div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  el.innerHTML = html || '<div class="no-data" style="padding:14px;">데이터 없음</div>';
 }
 
 // ═══════════════════════════════════════════════════════
