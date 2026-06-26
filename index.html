@@ -926,19 +926,27 @@ function normalizeDate(v){
   return s.slice(0,10);
 }
 
+function _isInvalidSheetValue(s){
+  if (s == null) return true;
+  const t = String(s).trim();
+  if (!t) return true;
+  // 구글 시트 수식 오류값은 비어있는 것으로 처리
+  return /^#(N\/A|REF!|VALUE!|NAME\?|DIV\/0!|NULL!|NUM!|ERROR!)$/i.test(t);
+}
+
 function pickFirstText(obj, exactKeys, fuzzyKeys=[]) {
   if (!obj || typeof obj !== 'object') return '';
   for (const key of exactKeys) {
     const v = obj[key];
     if (v === 0) return '0';
-    if (v !== null && v !== undefined && String(v).trim()) return String(v).trim();
+    if (v !== null && v !== undefined && !_isInvalidSheetValue(v) && String(v).trim()) return String(v).trim();
   }
   for (const rawKey of Object.keys(obj)) {
     const normKey = String(rawKey).toLowerCase().replace(/[\s_-]/g,'');
     if (!fuzzyKeys.some(k => normKey.includes(k))) continue;
     const v = obj[rawKey];
     if (v === 0) return '0';
-    if (v !== null && v !== undefined && String(v).trim()) return String(v).trim();
+    if (v !== null && v !== undefined && !_isInvalidSheetValue(v) && String(v).trim()) return String(v).trim();
   }
   return '';
 }
@@ -951,7 +959,8 @@ function normalizeClientRecord(c) {
   normalized.phone = pickFirstText(c, ['phone','연락처'], ['연락처','phone','tel']) || '';
   normalized.address = pickFirstText(c, ['address','addr','주소'], ['address','addr','주소','location']) || '';
   normalized.memo = pickFirstText(c, ['memo','note','notes','remark','remarks','comment','메모','비고'], ['memo','note','remark','comment','메모','비고']) || '';
-  normalized.openDate = normalizeDate(c.openDate || c['개설일'] || '');
+  const rawOpen = c.openDate || c['개설일'] || '';
+  normalized.openDate = _isInvalidSheetValue(rawOpen) ? '' : normalizeDate(rawOpen);
   normalized.status = pickFirstText(c, ['status','상태'], ['status','상태']) || c.status || 'active';
   normalized.cycle = pickFirstText(c, ['cycle','발주 주기'], ['cycle','주기']) || c.cycle || 'custom';
   normalized.beans = Array.isArray(c.beans)
@@ -4117,10 +4126,15 @@ try {
 <script>
 (function(){
   // ★★★ 여기를 본인 Apps Script 웹앱 URL로 수정하세요 (끝이 /exec) ★★★
-  const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycby2MgEd72vRd8OnpFgqKNLL_hUyWCIVEX-L_rCwQ9ETsShl__t6ZgwLwmJMK8PHl6Hicw/exec';
+  const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbya6V673E3lHwLdnABAMWIGxift-rG7vGlXc-j3aMJYs80Oc9pcJ4x7psuq8t_BI0nhsQ/exec';
+  const LEGACY_API_URLS = [
+    'https://script.google.com/macros/s/AKfycby2MgEd72vRd8OnpFgqKNLL_hUyWCIVEX-L_rCwQ9ETsShl__t6ZgwLwmJMK8PHl6Hicw/exec'
+  ];
 
   // 1) API URL 자동 설정 — iOS에서 처음 들어와도 동작
-  if (!localStorage.getItem('crm_api') && DEFAULT_API_URL.indexOf('여기에_배포ID') < 0) {
+  //    옛 배포 URL이 캐시되어 있으면 새 URL로 강제 교체 (거래처 address 컬럼 동기화를 위해)
+  const _savedApi = localStorage.getItem('crm_api');
+  if ((!_savedApi || LEGACY_API_URLS.indexOf(_savedApi) >= 0) && DEFAULT_API_URL.indexOf('여기에_배포ID') < 0) {
     localStorage.setItem('crm_api', DEFAULT_API_URL);
     if (typeof API_URL !== 'undefined') { try { API_URL = DEFAULT_API_URL; } catch(_){} }
     const inp = document.getElementById('api-url');
