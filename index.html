@@ -1549,7 +1549,7 @@ function renderClients() {
   const bSel = document.getElementById('c-bean');
   if(bSel){const cur=bSel.value;bSel.innerHTML='<option value="">전체 원두</option>'+BEANS.map(b=>`<option value="${b}"${b===cur?' selected':''}>${b}</option>`).join('');}
   let f = clients.slice();
-  if(q) f = f.filter(c => fuzzyMatch(c.name,q) || fuzzyMatch(c.manager||'',q) || fuzzyMatch(c.memo||'',q));
+  if(q) f = f.filter(c => fuzzyMatch(c.name,q) || fuzzyMatch(c.manager||'',q) || fuzzyMatch(c.phone||'',q) || fuzzyMatch(c.address||'',q) || fuzzyMatch(c.memo||'',q) || fuzzyMatch(c.openDate||'',q) || fuzzyMatch((CL[c.cycle]||c.cycle)||'',q));
   if(!q) f = filterByManager(f);
   if(st) f = f.filter(c=>c.status===st);
   if(bn) {
