@@ -518,6 +518,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <button class="btn xs" onclick="document.getElementById('inv-base-date').value=new Date().toISOString().slice(0,10);renderInventory();">오늘</button>
     <span id="inv-base-info" style="font-size:11px;color:var(--hint);"></span>
   </div>
+  <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;flex-wrap:wrap;">
+    <label style="font-size:12px;font-weight:700;color:var(--muted);">🔻 차감 시작일 (발주·출고 기준일)</label>
+    <input type="date" id="inv-start-date" onchange="setInvStartDate(this.value)"
+      style="padding:5px 8px;font-size:12px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
+    <button class="btn xs" onclick="setInvStartDate(firstInboundDate())">첫 입고일</button>
+    <button class="btn xs" onclick="setInvStartDate('')">전체 기간</button>
+    <span id="inv-start-info" style="font-size:11px;color:var(--hint);"></span>
+  </div>
   <div class="card" id="inv-summary"></div>
 
   <div class="sec-title">📋 입고 이력</div>
@@ -1026,14 +1034,17 @@ async function syncNow() {
     }
     // 재고 동기화 (Apps Script가 inventory 키로 반환해야 함)
     if (Array.isArray(data.inventory)) {
+      const invSeen = new Set();
       inventory = data.inventory.map(i=>({
         id     : Number(i.id) || (Date.now()+Math.random()),
         bean   : String(i.bean||'').trim(),
         inDate : normalizeDate(i.inDate || i.in_date),
         mfgDate: normalizeDate(i.mfgDate|| i.mfg_date),
         qty    : Number(i.qty)  || 0
-      })).filter(i=>i.bean && i.inDate); // 필수값 누락 데이터 제외
-      nextInvId = Math.max(0,...inventory.map(i=>i.id||0))+1;
+      })).filter(i=>i.bean && i.inDate && i.qty>0) // 필수값 누락/0수량 제외
+        // 같은 id가 중복 반환되면 재고가 이중 집계되므로 제거
+        .filter(i=>{ const k=String(i.id); if(invSeen.has(k)) return false; invSeen.add(k); return true; });
+      nextInvId = Math.max(0,...inventory.map(i=>Number(i.id)||0))+1;
       saveInv();
     } else if (data.inventory === undefined) {
       console.warn('[sync] Apps Script가 inventory를 반환하지 않음 — apps_script 코드 업데이트 필요');
@@ -2817,18 +2828,23 @@ function dlTemplate(type){
 }
 
 function importInventory(rows){
-  let add=0, skip=0;
+  let add=0, skip=0, dup=0;
   rows.forEach(r=>{
     const bean   = (r['원두']||r['bean']||'').toString().trim();
-    const inDate = (r['입고일']||r['inDate']||r['in_date']||'').toString().slice(0,10);
-    const mfgDate= (r['제조일']||r['mfgDate']||r['mfg_date']||'').toString().slice(0,10);
+    const inDate = normalizeDate(r['입고일']||r['inDate']||r['in_date']||'');
+    const mfgDate= normalizeDate(r['제조일']||r['mfgDate']||r['mfg_date']||'');
     const qty    = parseFloat(String(r['입고수량(kg)']||r['입고수량']||r['수량']||r['qty']||0).replace(/,/g,''))||0;
     if(!bean||!inDate||!qty){skip++;return;}
-    inventory.push({id:nextInvId++, bean, inDate, mfgDate, qty});
+    // 같은 원두·입고일·수량은 중복 업로드로 간주 (재고 이중 누적 방지)
+    if(inventory.some(i=>i.bean===bean && i.inDate===inDate && Number(i.qty)===qty)){dup++;return;}
+    const item={id:nextInvId++, bean, inDate, mfgDate, qty};
+    inventory.push(item);
+    // 시트에도 반영해야 다음 동기화에서 사라지지 않음
+    if(API_URL) apiPost({action:'saveInventory',data:item, before:null, after:item, op:'create', target:'inventory'});
     add++;
   });
   saveInv(); saveLocal(); refreshAll();
-  logUp(`✅ 재고 — 추가 ${add}, 스킵 ${skip}`,'ok');
+  logUp(`✅ 재고 — 추가 ${add}, 중복 ${dup}, 스킵 ${skip}`,'ok');
 }
 function resetAll(){if(!confirm('⚠ 전체 초기화?'))return;localStorage.removeItem('crm_c');localStorage.removeItem('crm_o');location.reload();}
 
@@ -2936,78 +2952,96 @@ function deleteInventory(id){
   renderInventory();
 }
 
-function deleteInventory(id){
-  if(!confirm('이 입고 기록을 삭제할까요?'))return;
-  inventory=inventory.filter(i=>i.id!==id);
-  saveInv();
-  if(API_URL) apiPost({action:'deleteInventory',data:{id}});
-  renderInventory();
-}
-
 // ───────────────────────────────────────────────────────
 // FIFO(선입선출) 차감 계산
 // 각 입고건을 입고일 빠른 순으로 정렬 → 발주수량을 가장 빠른 입고건부터 차례로 차감
-// 반환: { batches:[{...item, used, remain, exhausted, exhaustOrders[]}], orders:[...관련 발주], totalIn, totalUsed, totalRemain }
+// 반환: { batches:[{...item, used, remain, exhausted, exhaustOrders[]}], relOrders, totalIn, totalUsed, totalShort, totalRemain }
 // ───────────────────────────────────────────────────────
-function calcInventoryFIFO(bean, baseDate){
-  // 기준일 (입고일 기준 재고 계산: 기준일보다 미래 입고건은 제외)
+// 차감 시작일(발주·출고 기준일) 설정 — 이 날짜 이전의 발주는 재고 차감에서 제외
+function getInvStartDate(){ return localStorage.getItem('crm_inv_start')||''; }
+function firstInboundDate(){
+  const ds = inventory.map(i=>i.inDate).filter(Boolean).sort();
+  return ds.length ? ds[0] : '';
+}
+function setInvStartDate(v){
+  if(v) localStorage.setItem('crm_inv_start', v); else localStorage.removeItem('crm_inv_start');
+  const el=document.getElementById('inv-start-date'); if(el) el.value = v||'';
+  renderInventory();
+}
+
+function calcInventoryFIFO(bean, baseDate, startDate){
+  // 기준일 (기준일보다 미래의 입고/발주는 제외)
   const _today = baseDate || new Date().toISOString().slice(0,10);
+  const _start = (startDate===undefined ? getInvStartDate() : startDate) || '';
   const batches = inventory.filter(i=>i.bean===bean && (i.inDate||'1900-01-01') <= _today)
     .sort((a,b)=>{
       const c = (a.inDate||'').localeCompare(b.inDate||'');
       return c!==0 ? c : ((a.id||0) - (b.id||0));
     })
     .map(i=>({...i, qty:Number(i.qty)||0, used:0, remain:Number(i.qty)||0, exhausted:false, exhaustOrders:[]}));
-  if (!batches.length) return null;
 
-  // 2. 가장 빠른 입고일 이후 ~ 기준일 이전의 발주만 차감
-  const earliest = batches[0].inDate || '1900-01-01';
+  // 차감 시작일 ~ 기준일 사이의 발주를 차감 대상으로 사용한다.
   const relOrders = orders
-    .filter(o=>o.bean===bean && (o.date||'') >= earliest && (o.date||'') <= _today)
+    .filter(o=>o.bean===bean && (o.date||'') <= _today && (!_start || (o.date||'') >= _start))
     .sort((a,b)=>{
       const c = (a.date||'').localeCompare(b.date||'');
       return c!==0 ? c : ((a.id||0) - (b.id||0));
     });
 
-  // 3. 발주를 한 건씩 가져와 batch에 FIFO로 차감
-  // 단, 발주일자가 batch 입고일 이후여야 차감 가능 (입고 전 발주는 다음 batch로 넘어감)
+  if (!batches.length && !relOrders.length) return null;
+
+  let totalShort = 0;   // 재고보다 많이 출고된 부족분(음수 재고)
+  const earliest = batches.length ? (batches[0].inDate || '1900-01-01') : null;
+
   relOrders.forEach(ord=>{
     let need = Number(ord.qty)||0;
     if (need <= 0) return;
+    // 1차: 발주일 시점에 이미 입고된 batch에서 선입선출 차감
     for (let i=0; i<batches.length && need>0; i++){
       const b = batches[i];
-      // 발주일자가 입고일 이전이면 이 batch는 건너뜀 (입고 전엔 사용 불가)
       if ((ord.date||'') < (b.inDate||'1900-01-01')) continue;
       if (b.remain <= 0) continue;
       const take = Math.min(b.remain, need);
-      b.used   += take;
-      b.remain -= take;
+      b.used += take; b.remain -= take;
       b.exhaustOrders.push({orderId:ord.id, date:ord.date, clientId:ord.clientId, clientName:ord.clientName, qty:take});
       need -= take;
       if (b.remain <= 0.0001) b.exhausted = true;
     }
-    // need>0 이면 재고 부족분 (음수 재고). 마지막 batch에 흡수시켜 부채로 표시 가능하지만 일단 무시.
+    // 2차: 입고일이 발주일보다 늦은 batch에도 차감(입고 등록 누락/지연 대비).
+    //      이 단계가 없으면 출고분이 사라져 재고가 계속 과대 집계됨.
+    for (let i=0; i<batches.length && need>0; i++){
+      const b = batches[i];
+      if (b.remain <= 0) continue;
+      const take = Math.min(b.remain, need);
+      b.used += take; b.remain -= take;
+      b.exhaustOrders.push({orderId:ord.id, date:ord.date, clientId:ord.clientId, clientName:ord.clientName, qty:take, late:true});
+      need -= take;
+      if (b.remain <= 0.0001) b.exhausted = true;
+    }
+    // 남은 need는 재고 부족분으로 누적 (무시하지 않음)
+    if (need > 0.0001) totalShort += need;
   });
 
-  const totalIn    = batches.reduce((s,b)=>s+b.qty, 0);
-  const totalUsed  = batches.reduce((s,b)=>s+b.used, 0);
-  const totalRemain= totalIn - totalUsed;
-  return {batches, relOrders, totalIn, totalUsed, totalRemain, earliest};
+  const totalIn     = batches.reduce((s,b)=>s+b.qty, 0);
+  const totalUsed   = batches.reduce((s,b)=>s+b.used, 0) + totalShort;
+  const totalRemain = totalIn - totalUsed; // 부족 시 음수
+  return {batches, relOrders, totalIn, totalUsed, totalShort, totalRemain, earliest};
 }
 
 function calcBeanStock(bean, baseDate){
   // FIFO 결과를 활용해 요약 지표 계산
   const fifo = calcInventoryFIFO(bean, baseDate);
   if (!fifo) return null;
-  const {batches, totalIn, totalUsed, totalRemain} = fifo;
+  const {batches, totalIn, totalUsed, totalRemain, totalShort} = fifo;
   const totalIn_ = totalIn;
   const used     = totalUsed;
   const remain   = totalRemain;
   // 재고 비율 = 잔량 / 총 입고
   const ratio = totalIn_ > 0 ? Math.max(0, remain/totalIn_) : 0;
-  // ── 알림 단계 (사용자 요청: 50% 미만=주의 / 30% 미만=경고) ──
+  // ── 알림 단계 (50% 미만=주의 / 30% 미만=경고 / 부족=음수 재고) ──
   let alertLevel='ok', alertText='✓ 정상';
-  if (totalIn_ > 0) {
+  if (remain <= 0)          { alertLevel='danger'; alertText= totalShort>0 ? `⛔ 재고 부족 (${totalShort.toFixed(1)}kg 초과 출고)` : '⛔ 소진'; }
+  else if (totalIn_ > 0) {
     if (ratio < 0.30)      { alertLevel='danger'; alertText='⚠ 경고 (30% 미만)'; }
     else if (ratio < 0.50) { alertLevel='warn';   alertText='⚡ 주의 (50% 미만)'; }
   }
@@ -3027,7 +3061,7 @@ function calcBeanStock(bean, baseDate){
   } else if(remain<=0){ exhaustDate='소진됨'; daysLeft=0; }
   // 권장 입고량 (다음 30일치)
   const need30=Math.max(0, Math.ceil(dailyAvg*30 - remain));
-  return {totalIn:totalIn_, used, remain, ratio, alertLevel, alertText, dailyAvg, exhaustDate, daysLeft, need30, batches, latestIn:batches[batches.length-1]};
+  return {totalIn:totalIn_, used, remain, short:totalShort, ratio, alertLevel, alertText, dailyAvg, exhaustDate, daysLeft, need30, batches, latestIn:batches.length?batches[batches.length-1]:null};
 }
 
 function renderInventory(){
@@ -3043,6 +3077,12 @@ function renderInventory(){
   const todayStr = new Date().toISOString().slice(0,10);
   const baseInfo = document.getElementById('inv-base-info');
   if (baseInfo) baseInfo.textContent = baseDate===todayStr ? '(오늘 기준)' : `(${baseDate} 기준 — ${baseDate>todayStr?'미래':'과거'} 시점)`;
+  // 차감 시작일 (발주·출고 기준일)
+  const startEl = document.getElementById('inv-start-date');
+  const startDate = getInvStartDate();
+  if (startEl && startEl.value !== startDate) startEl.value = startDate;
+  const startInfo = document.getElementById('inv-start-info');
+  if (startInfo) startInfo.textContent = startDate ? `(${startDate} 이후 발주만 차감)` : '(전체 기간 발주 차감)';
   // 재고 등록된 모든 원두 (BEANS 외 항목도 포함)
   const allBeans = [...new Set(inventory.map(i=>i.bean).filter(Boolean))];
   const orderedBeans = [...BEANS.filter(b=>allBeans.includes(b)), ...allBeans.filter(b=>!BEANS.includes(b))];
