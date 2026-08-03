@@ -888,8 +888,9 @@ function loadLocal() {
   // 이전 버전에서 잘못 저장된 ISO/Date 문자열을 'YYYY-MM-DD' 로 자동 보정
   if (typeof normalizeDate === 'function') {
     orders = orders.map(o => {
-      const qty = Number(o.qty)||0, price = Number(o.price)||0;
-      return { ...o, date: normalizeDate(o.date), qty, price, amount: Number(o.amount) || Math.round(qty*price) };
+      const qty = parseNum(o.qty), price = Math.abs(parseNum(o.price));
+      const amt = parseNum(o.amount);
+      return { ...o, date: normalizeDate(o.date), qty, price, amount: amt || Math.round(qty*price) };
     });
     clients = clients.map(c => normalizeClientRecord(c));
   }
@@ -916,6 +917,22 @@ function setSyncBadge(mode) {
 
 // 구글 시트의 날짜 셀은 Date 객체 → JSON 직렬화 시 ISO+UTC가 되어 하루씩 밀리거나
 // 'YYYY-MM-DDTHH:mm:ss.sssZ' 그대로 표시되는 문제가 있다. KST(+9) 기준으로 'YYYY-MM-DD' 정규화.
+function parseNum(v){
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let t = String(v).trim();
+  if (!t) return 0;
+  let neg = false;
+  // 회계식 괄호 표기 (123) / 마이너스 기호 변형 / 반품 표기 △ ▲
+  if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
+  t = t.replace(/[\u2212\u2013\u2014\uFF0D]/g, '-').replace(/[△▲]/g, '-');
+  if (/^-/.test(t)) { neg = true; t = t.replace(/^-+/, ''); }
+  if (/-$/.test(t)) { neg = true; t = t.replace(/-+$/, ''); }
+  t = t.replace(/[,\s원개kgKG]/g, '');
+  const n = parseFloat(t);
+  if (!isFinite(n)) return 0;
+  return neg ? -Math.abs(n) : n;
+}
 function normalizeDate(v){
   if (v === null || v === undefined || v === '') return '';
   if (v instanceof Date) {
@@ -1015,9 +1032,9 @@ async function syncNow() {
       const rawN = data.orders.length;
       orders = data.orders
         .map(o=>{
-          const qty = Number(o.qty)||0;
-          const price = Number(o.price)||0;
-          const amount = Number(o.amount) || Math.round(qty*price);
+          const qty = parseNum(o.qty);
+          const price = Math.abs(parseNum(o.price));
+          const amount = parseNum(o.amount) || Math.round(qty*price);
           return { ...o, date: normalizeDate(o.date), qty, price, amount };
         })
         // Apps Script가 시트 빈 행까지 함께 반환하는 경우가 있어 의미없는 레코드 제외
@@ -1025,7 +1042,7 @@ async function syncNow() {
         .filter(o => {
           const hasClient = (o.clientId !== '' && o.clientId != null) || (o.clientName && String(o.clientName).trim());
           const hasDate   = o.date && /^\d{4}-\d{2}-\d{2}$/.test(o.date);
-          const hasQty    = o.qty > 0;
+          const hasQty    = Number.isFinite(o.qty) && o.qty !== 0; // 반품/취소(음수) 수량도 집계에 포함
           return hasClient && hasDate && hasQty;
         });
       const dropped = rawN - orders.length;
@@ -2797,9 +2814,10 @@ function importOrders(rows){
     const date=(r['판매일']||r['발주일']||r['date']||'').toString().slice(0,10);
     const cid=code&&!isNaN(Number(code))?Number(code):null;
     if(!date){skip++;return;}
-    const qty=parseFloat(String(r['수량']||r['qty']||0).replace(/,/g,''))||0;
-    const amt=parseFloat(String(r['판매액']||r['amount']||0).replace(/,/g,''))||0;
-    const price=parseFloat(String(r['단가']||r['price']||0).replace(/,/g,'')) || (qty>0&&amt>0?Math.round(amt/qty):0);
+    const qty=parseNum(r['수량']!==undefined&&r['수량']!==''?r['수량']:r['qty']);
+    const amt=parseNum(r['판매액']!==undefined&&r['판매액']!==''?r['판매액']:r['amount']);
+    const price=Math.abs(parseNum(r['단가']!==undefined&&r['단가']!==''?r['단가']:r['price'])) || (qty!==0&&amt!==0?Math.round(Math.abs(amt)/Math.abs(qty)):0);
+    if(qty===0&&amt===0){skip++;return;}
     const bean=BEANS.find(b=>(r['발주 원두']||r['bean']||'').toString().includes(b))||'';
     orders.push({id:nextOid++,clientId:cid||0,clientName:cname,date,qty,price,amount:amt||Math.round(qty*price),bean,memo:''});
     add++;
