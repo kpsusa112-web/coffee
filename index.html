@@ -406,6 +406,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     </div>
     <div id="o-month-btns" style="display:flex;flex-wrap:wrap;gap:5px;"></div>
   </div>
+  <!-- 기간 필터 -->
+  <div style="margin-bottom:10px;padding:10px 12px;background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rL);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <span style="font-size:12px;font-weight:700;color:var(--muted);">📅 기간 필터</span>
+      <button onclick="clearOrderDateRange()" id="o-date-clear" style="display:none;font-size:11px;padding:2px 8px;border-radius:var(--r);border:1px solid var(--bdr2);background:var(--surf2);color:var(--muted);cursor:pointer;">초기화</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <input type="date" id="o-date-start" onchange="setOrderDateStart(this.value)"
+        style="flex:1;min-width:110px;padding:8px 10px;font-size:13px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
+      <span style="font-size:13px;color:var(--muted);font-weight:600;">~</span>
+      <input type="date" id="o-date-end" onchange="setOrderDateEnd(this.value)"
+        style="flex:1;min-width:110px;padding:8px 10px;font-size:13px;border:1px solid var(--bdr2);border-radius:var(--r);background:var(--surf);color:var(--txt);">
+    </div>
+    <div id="o-date-label" style="margin-top:6px;font-size:12px;font-weight:700;color:var(--grn-dk);display:none;"></div>
+  </div>
   <div style="margin-bottom:8px;">
     <div style="display:flex;gap:5px;flex-wrap:wrap;">
       <button id="owk-0" onclick="setOrderWeek(0)" style="flex:1;padding:6px 4px;font-size:12px;font-weight:700;border-radius:var(--r);border:1.5px solid var(--grn);background:var(--grn);color:#fff;cursor:pointer;">전체</button>
@@ -1160,7 +1175,7 @@ async function apiPost(body) {
 //  - 웹에 호스팅된 경우(GitHub Pages, Apps Script 등)에는
 //    location.reload(true) 로 즉시 새 버전을 받음
 // ═══════════════════════════════════════════════════════
-const APP_VERSION = '20.0.0';
+const APP_VERSION = '20.1.0';
 const APP_BUILD   = '2026-05-10';
 let   _verCheckDone = false;
 
@@ -1658,6 +1673,7 @@ function orderSearchClear() {
   orderClientFilter=null;
   const cl = document.getElementById('o-clear');
   if(cl) cl.style.display='none';
+  clearOrderDateRange();
   renderOrders();
   inp?.focus();
 }
@@ -1675,6 +1691,8 @@ function selectOrderClient(id,name){
 let orderWeekFilter = 0; // 0=전체, 1~4=주차
 let selectedOrderMonths = new Set(); // 다중 선택된 월 목록
 let orderListSort = {key:'kg', dir:'desc'}; // 정렬 상태
+let orderDateStart = ''; // 기간 필터 시작일 YYYY-MM-DD
+let orderDateEnd = '';   // 기간 필터 종료일 YYYY-MM-DD
 function setOrderSort(key){
   if(orderListSort.key===key){
     orderListSort.dir = orderListSort.dir==='desc' ? 'asc' : 'desc';
@@ -1745,6 +1763,12 @@ function toggleOrderMonth(m) {
 function clearOrderMonths() {
   selectedOrderMonths.clear();
   orderWeekFilter = 0;
+  orderDateStart = '';
+  orderDateEnd = '';
+  const startInput = document.getElementById('o-date-start');
+  const endInput = document.getElementById('o-date-end');
+  if (startInput) startInput.value = '';
+  if (endInput) endInput.value = '';
   updateOrderWeekUI();
   const wrap = document.getElementById('o-week-wrap');
   if (wrap) wrap.style.display = 'none';
@@ -1754,6 +1778,37 @@ function clearOrderMonths() {
 
 // 이전 호환 (onOrderMonthChange 제거 후 대체)
 function onOrderMonthChange() { renderOrders(); }
+
+function setOrderDateStart(val) {
+  orderDateStart = val || '';
+  // 시작일이 종료일보다 늦으면 종료일을 시작일로 맞춤
+  if (orderDateStart && orderDateEnd && orderDateStart > orderDateEnd) {
+    orderDateEnd = orderDateStart;
+    const endInput = document.getElementById('o-date-end');
+    if (endInput) endInput.value = orderDateEnd;
+  }
+  renderOrders();
+}
+function setOrderDateEnd(val) {
+  orderDateEnd = val || '';
+  // 종료일이 시작일보다 이전이면 시작일을 종료일로 맞춤
+  if (orderDateStart && orderDateEnd && orderDateEnd < orderDateStart) {
+    orderDateStart = orderDateEnd;
+    const startInput = document.getElementById('o-date-start');
+    if (startInput) startInput.value = orderDateStart;
+  }
+  renderOrders();
+}
+function clearOrderDateRange() {
+  orderDateStart = '';
+  orderDateEnd = '';
+  const startInput = document.getElementById('o-date-start');
+  const endInput = document.getElementById('o-date-end');
+  if (startInput) startInput.value = '';
+  if (endInput) endInput.value = '';
+  renderOrders();
+}
+
 
 function setOrderWeek(wk) {
   orderWeekFilter = wk;
@@ -1780,6 +1835,22 @@ function renderOrders() {
     obSel.innerHTML = '<option value="">전체 원두</option>' + BEANS.map(b => `<option value="${b}"${b === cur ? ' selected' : ''}>${b}</option>`).join('');
   }
   renderOrderMonthBtns();
+  // 기간 필터 입력값 동기화
+  const dsInput = document.getElementById('o-date-start');
+  const deInput = document.getElementById('o-date-end');
+  if (dsInput) dsInput.value = orderDateStart;
+  if (deInput) deInput.value = orderDateEnd;
+  const dateClearBtn = document.getElementById('o-date-clear');
+  const dateLabelEl = document.getElementById('o-date-label');
+  if (dateClearBtn) dateClearBtn.style.display = (orderDateStart || orderDateEnd) ? 'block' : 'none';
+  if (dateLabelEl) {
+    if (orderDateStart || orderDateEnd) {
+      dateLabelEl.textContent = `선택 기간: ${orderDateStart || '처음'} ~ ${orderDateEnd || '끝'}`;
+      dateLabelEl.style.display = 'block';
+    } else {
+      dateLabelEl.style.display = 'none';
+    }
+  }
 
   const obv = obSel?.value || '';
   const q = orderSearchQuery.trim();
@@ -1812,6 +1883,17 @@ function renderOrders() {
   }
   if (obv) f = f.filter(o => o.bean === obv);
   if (selectedOrderMonths.size > 0) f = f.filter(o => selectedOrderMonths.has(o.date?.slice(0, 7)));
+    // 기간 필터
+    if (orderDateStart || orderDateEnd) {
+      const start = orderDateStart || '';
+      const end = orderDateEnd || '';
+      f = f.filter(o => {
+        if (!o.date) return false;
+        if (start && o.date < start) return false;
+        if (end && o.date > end) return false;
+        return true;
+      });
+    }
 
   // 주차별 총합 (단일 월 선택시만)
   const wtEl = document.getElementById('o-week-totals');
@@ -1936,11 +2018,12 @@ function renderOrders() {
   const monthLabel = selectedOrderMonths.size > 0
     ? [...selectedOrderMonths].sort().map(m => m.replace('-', '년 ') + '월').join(' + ')
     : '';
+    const dateLabel = (orderDateStart || orderDateEnd) ? `${orderDateStart || '처음'} ~ ${orderDateEnd || '끝'}` : '';
   const totalRevF = f.reduce((s,o)=>s+(o.amount||(o.qty*o.price)||0),0);
   const totalKgF = f.reduce((a, o) => a + (o.qty || 0), 0);
-  const baseLine = singleMonth && orderWeekFilter > 0
-    ? `${singleMonth.replace('-', '년 ')}월 ${wkLabels[orderWeekFilter]} · 거래처 ${groupList.length}곳 · ${f.length}건 · 총 ${totalKgF}kg`
-    : `${monthLabel ? monthLabel + ' · ' : ''}거래처 ${groupList.length}곳 · 총 ${f.length}건 · ${totalKgF}kg${q ? ' ("' + q + '" 검색결과)' : ''}`;
+    const baseLine = singleMonth && orderWeekFilter > 0
+      ? `${singleMonth.replace('-', '년 ')}월 ${wkLabels[orderWeekFilter]} · 거래처 ${groupList.length}곳 · ${f.length}건 · 총 ${totalKgF}kg`
+      : `${dateLabel ? dateLabel + ' · ' : ''}${monthLabel ? monthLabel + ' · ' : ''}거래처 ${groupList.length}곳 · 총 ${f.length}건 · ${totalKgF}kg${q ? ' ("' + q + '" 검색결과)' : ''}`;
   document.getElementById('o-count').innerHTML = `
     <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">${baseLine}</div>
     <div style="font-size:13px;font-weight:700;color:var(--amb);">💰 총 매출: ₩${fmtKRW(totalRevF)}</div>`;
@@ -2878,8 +2961,21 @@ function exportAll(){
   XLSX.writeFile(wb,`CRM_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 function exportOrders(){
-  let f=orders;
+  let f=orders.slice();
   if(orderClientFilter)f=f.filter(o=>o.clientId===orderClientFilter.id);
+  const obSel=document.getElementById('o-bean');
+  const obv=obSel?.value||'';
+  if(obv)f=f.filter(o=>o.bean===obv);
+  if(selectedOrderMonths.size>0)f=f.filter(o=>selectedOrderMonths.has(o.date?.slice(0,7)));
+  if(orderDateStart||orderDateEnd){
+    const start=orderDateStart||'', end=orderDateEnd||'';
+    f=f.filter(o=>o.date && (!start||o.date>=start) && (!end||o.date<=end));
+  }
+  if(orderSearchQuery.trim()){
+    const q=orderSearchQuery.trim();
+    const matchedIds=new Set(clients.filter(c=>fuzzyMatch(c.name,q)||fuzzyMatch(c.manager||'',q)||fuzzyMatch(c.address||'',q)||fuzzyMatch(c.memo||'',q)||fuzzyMatch(c.phone||'',q)).map(c=>c.id));
+    f=f.filter(o=>matchedIds.has(o.clientId)||fuzzyMatch(o.clientName||'',q)||fuzzyMatch(o.bean||'',q)||fuzzyMatch(o.memo||'',q));
+  }
   const wb=XLSX.utils.book_new();
   const rows=[...f].sort((a,b)=>b.date.localeCompare(a.date)).map(o=>{const c=clients.find(x=>x.id===o.clientId);return{'발주일':o.date,'거래처명':c?c.name:o.clientName||'','원두':o.bean||'','발주량(kg)':o.qty||0,'단가(원/kg)':o.price||0,'총액(원)':o.amount||(o.qty*(o.price||0))||0};});
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'발주');
@@ -3577,7 +3673,7 @@ function getSampleOrders(){return[{id:1,clientId:57254,clientName:"달큰커피"
   if (!('serviceWorker' in navigator)) return;
   // SW 코드를 Blob으로 등록 (파일 없이 단일 HTML에서 동작)
   const swCode = `
-const CACHE = 'coffee-crm-v5';
+const CACHE = 'coffee-crm-v6';
 const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'
